@@ -41,7 +41,7 @@ func (h *httpKVAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		h.store.Propose(key, string(v))
+		h.store.Propose(key, string(v)) // 提交到 proposeC chan 走 raft 流程
 
 		// Optimistic-- no waiting for ack from raft. Value is not yet
 		// committed so a subsequent GET on the key may return old value
@@ -52,7 +52,7 @@ func (h *httpKVAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		} else {
 			http.Error(w, "Failed to GET", http.StatusNotFound)
 		}
-	case r.Method == "POST":
+	case r.Method == "POST": // 变更配置 ( 添加节点 )
 		url, err := ioutil.ReadAll(r.Body)
 		if err != nil {
 			log.Printf("Failed to read on POST (%v)\n", err)
@@ -76,7 +76,7 @@ func (h *httpKVAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		// As above, optimistic that raft will apply the conf change
 		w.WriteHeader(http.StatusNoContent)
-	case r.Method == "DELETE":
+	case r.Method == "DELETE": // 变更配置 ( 删除节点 )
 		nodeId, err := strconv.ParseUint(key[1:], 0, 64)
 		if err != nil {
 			log.Printf("Failed to convert ID for conf change (%v)\n", err)
@@ -105,7 +105,7 @@ func (h *httpKVAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func serveHttpKVAPI(kv *kvstore, port int, confChangeC chan<- raftpb.ConfChange, errorC <-chan error) {
 	srv := http.Server{
 		Addr: ":" + strconv.Itoa(port),
-		Handler: &httpKVAPI{
+		Handler: &httpKVAPI{ // 收到 http 请求后，调用 httpKVAPI 的 ServeHTTP 方法进行处理
 			store:       kv,
 			confChangeC: confChangeC,
 		},

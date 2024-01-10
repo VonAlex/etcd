@@ -72,10 +72,12 @@ var (
 // generations:
 //
 //	{empty} -> key SHOULD be removed.
+//
+// generations 表示一个 key 从创建到删除的过程，每代对应 key 的一个生命周期的开始与结束。
 type keyIndex struct {
-	key         []byte
-	modified    revision // the main rev of the last modification
-	generations []generation
+	key         []byte       // 用户的 key 名称，比如 "hello"
+	modified    revision     // the main rev of the last modification 最后一次修改 key 时的 etcd 版本号
+	generations []generation // 一个 key 若干代版本号信息
 }
 
 // put puts a revision to the keyIndex.
@@ -338,9 +340,9 @@ func (ki *keyIndex) String() string {
 
 // generation contains multiple revisions of a key.
 type generation struct {
-	ver     int64
-	created revision // when the generation is created (put in first revision).
-	revs    []revision
+	ver     int64      // 表示此 key 的修改次数
+	created revision   // when the generation is created (put in first revision). 表示 generation 结构创建时的版本号
+	revs    []revision // 每次修改 key 时的 revision 追加到此数组
 }
 
 func (g *generation) isEmpty() bool { return g == nil || len(g.revs) == 0 }

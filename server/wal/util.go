@@ -69,6 +69,7 @@ func isValidSeq(lg *zap.Logger, names []string) bool {
 	return true
 }
 
+// wal 文件的格式 seq-index.wal
 func readWALNames(lg *zap.Logger, dirpath string) ([]string, error) {
 	names, err := fileutil.ReadDir(dirpath)
 	if err != nil {

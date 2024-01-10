@@ -18,18 +18,23 @@ package tracker
 type StateType uint64
 
 const (
-	// StateProbe indicates a follower whose last index isn't known. Such a
-	// follower is "probed" (i.e. an append sent periodically) to narrow down
+	// StateProbe indicates a follower whose last index isn't known.
+	// StateProbe 状态表示，丢失了该 follower 的最新 index。
+	// Such a follower is "probed" (i.e. an append sent periodically) to narrow down
 	// its last index. In the ideal (and common) case, only one round of probing
 	// is necessary as the follower will react with a hint. Followers that are
 	// probed over extended periods of time are often offline.
+	// 理想情况下，只需要一次探测，因为 follower 会在 response 中返回它的 last index。
+	// 持续处于 StateProbe 状态的 follower 通常是 offline 的。
 	StateProbe StateType = iota
 	// StateReplicate is the state steady in which a follower eagerly receives
 	// log entries to append to its log.
+	// follower 稳定接受来自 leader 的数据，并 append 到自己的 log
 	StateReplicate
 	// StateSnapshot indicates a follower that needs log entries not available
 	// from the leader's Raft log. Such a follower needs a full snapshot to
 	// return to StateReplicate.
+	// 接收快照状态。
 	StateSnapshot
 )
 

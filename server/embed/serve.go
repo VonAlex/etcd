@@ -89,6 +89,7 @@ func newServeCtx(lg *zap.Logger) *serveCtx {
 // serve accepts incoming connections on the listener l,
 // creating a new service goroutine for each. The service goroutines
 // read requests and then call handler to reply to them.
+// serve 在 listener l 上接受发来的连接，并为其创建一个 service goroutine。
 func (sctx *serveCtx) serve(
 	s *etcdserver.EtcdServer,
 	tlsinfo *transport.TLSInfo,

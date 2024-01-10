@@ -232,6 +232,9 @@ stale log entries:
 	back to follower, because it indicates that there is a valid leader sending
 	'MsgApp' messages. Candidate and follower respond to this message in
 	'MsgAppResp' type.
+	MsgApp 包含了要同步的日志条目，leader 向其他节点同步数据。
+	当 'MsgApp' 传给 candidate 的 Step 方法时，candidate 转变成 follower，因为这意味着有合法的 leader 正在发 'MsgApp' 消息。
+	Candidate 和 follower 回复 'MsgAppResp' 类型的消息。
 
 	'MsgAppResp' is response to log replication request('MsgApp'). When
 	'MsgApp' is passed to candidate or follower's Step method, it responds by

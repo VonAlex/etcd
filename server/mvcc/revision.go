@@ -25,12 +25,12 @@ const revBytesLen = 8 + 1 + 8
 // The set of changes that share same main revision changes the key-value space atomically.
 type revision struct {
 	// main is the main revision of a set of changes that happen atomically.
-	main int64
+	main int64 // 一个全局递增的主版本号,随着 put/txn/delete 等事务递增
 
 	// sub is the sub revision of a change in a set of changes that happen
 	// atomically. Each change has different increasing sub revision in that
 	// set.
-	sub int64
+	sub int64 // 一个事务内的子版本号，从 0 开始随事务内的 put/delete 操作递增
 }
 
 func (a revision) GreaterThan(b revision) bool {

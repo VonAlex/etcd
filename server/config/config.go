@@ -304,6 +304,7 @@ func (c *ServerConfig) SnapDir() string { return filepath.Join(c.MemberDir(), "s
 func (c *ServerConfig) ShouldDiscover() bool { return c.DiscoveryURL != "" }
 
 // ReqTimeout returns timeout for request to finish.
+// etcd 默认超时 7s ( 5 + 2 * 1 )
 func (c *ServerConfig) ReqTimeout() time.Duration {
 	// 5s for queue waiting, computation and disk IO delay
 	// + 2 * election timeout for possible leader election

@@ -60,7 +60,7 @@ func ReadDir(d string, opts ...ReadDirOption) ([]string, error) {
 	if op.ext != "" {
 		tss := make([]string, 0)
 		for _, v := range names {
-			if filepath.Ext(v) == op.ext {
+			if filepath.Ext(v) == op.ext { // 过滤指定后缀名的文件
 				tss = append(tss, v)
 			}
 		}

@@ -28,7 +28,7 @@ func (tw *watchableStoreTxnWrite) End() {
 
 	rev := tw.Rev() + 1
 	evs := make([]mvccpb.Event, len(changes))
-	for i, change := range changes {
+	for i, change := range changes { // watcher 处理
 		evs[i].Kv = &changes[i]
 		if change.CreateRevision == 0 {
 			evs[i].Type = mvccpb.DELETE

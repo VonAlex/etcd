@@ -121,13 +121,13 @@ type ProgressTracker struct {
 
 	Votes map[uint64]bool
 
-	MaxInflight int
+	MaxInflight int // Inflights 的容量
 }
 
 // MakeProgressTracker initializes a ProgressTracker.
 func MakeProgressTracker(maxInflight int) ProgressTracker {
 	p := ProgressTracker{
-		MaxInflight: maxInflight,
+		MaxInflight: maxInflight, // 默认长度 512
 		Config: Config{
 			Voters: quorum.JointConfig{
 				quorum.MajorityConfig{},
@@ -165,16 +165,20 @@ var _ quorum.AckedIndexer = matchAckIndexer(nil)
 
 // AckedIndex implements IndexLookuper.
 func (l matchAckIndexer) AckedIndex(id uint64) (quorum.Index, bool) {
-	pr, ok := l[id]
+	pr, ok := l[id] // 根据 id 找到 Progress
 	if !ok {
 		return 0, false
 	}
+	// Match 是 Peer 回复给 Leader 确认收到的最大的日志索引
 	return quorum.Index(pr.Match), true
 }
 
 // Committed returns the largest log index known to be committed based on what
 // the voting members of the group have acknowledged.
+// 根据各 follower 确认提交的情况，计算当前集群最大提交的日志索引。
+// raft认为超过半数以上 follower 确认接收的日志就算是已提交的。
 func (p *ProgressTracker) Committed() uint64 {
+	// Voters.CommittedIndex 使用每个 peer 的 Progress.Match 来计算 raft 当前已经提交的最大日志索引
 	return uint64(p.Voters.CommittedIndex(matchAckIndexer(p.Progress)))
 }
 

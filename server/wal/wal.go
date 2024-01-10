@@ -709,7 +709,7 @@ func (w *WAL) cut() error {
 		return serr
 	}
 
-	if err := w.tail().Truncate(off); err != nil {
+	if err := w.tail().Truncate(off); err != nil { // truncate 文件到实际大小 offset
 		return err
 	}
 
@@ -801,14 +801,14 @@ func (w *WAL) sync() error {
 	err := fileutil.Fdatasync(w.tail().File)
 
 	took := time.Since(start)
-	if took > warnSyncDuration {
+	if took > warnSyncDuration { // fdatasync 耗时超过 1s，打印日志
 		w.lg.Warn(
 			"slow fdatasync",
 			zap.Duration("took", took),
 			zap.Duration("expected-duration", warnSyncDuration),
 		)
 	}
-	walFsyncSec.Observe(took.Seconds())
+	walFsyncSec.Observe(took.Seconds()) // 更新监控
 
 	return err
 }
@@ -893,12 +893,12 @@ func (w *WAL) Close() error {
 
 func (w *WAL) saveEntry(e *raftpb.Entry) error {
 	// TODO: add MustMarshalTo to reduce one allocation.
-	b := pbutil.MustMarshal(e)
+	b := pbutil.MustMarshal(e) // 序列化数据
 	rec := &walpb.Record{Type: entryType, Data: b}
 	if err := w.encoder.encode(rec); err != nil {
 		return err
 	}
-	w.enti = e.Index
+	w.enti = e.Index // 更新 index，最近写入的 entry 序号
 	return nil
 }
 
@@ -937,7 +937,7 @@ func (w *WAL) Save(st raftpb.HardState, ents []raftpb.Entry) error {
 	if err != nil {
 		return err
 	}
-	if curOff < SegmentSizeBytes {
+	if curOff < SegmentSizeBytes { // < 64M 判断是否需要 sync
 		if mustSync {
 			// gofail: var walBeforeSync struct{}
 			err = w.sync()

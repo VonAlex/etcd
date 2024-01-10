@@ -149,7 +149,7 @@ func newRaftNode(cfg raftNodeConfig) *raftNode {
 	if r.heartbeat == 0 {
 		r.ticker = &time.Ticker{}
 	} else {
-		r.ticker = time.NewTicker(r.heartbeat)
+		r.ticker = time.NewTicker(r.heartbeat) // cfg.TickMs
 	}
 	return r
 }
@@ -178,13 +178,13 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 				if rd.SoftState != nil {
 					newLeader := rd.SoftState.Lead != raft.None && rh.getLead() != rd.SoftState.Lead
 					if newLeader {
-						leaderChanges.Inc()
+						leaderChanges.Inc() // leader 变了
 					}
 
 					if rd.SoftState.Lead == raft.None {
-						hasLeader.Set(0)
+						hasLeader.Set(0) // 没有 leader
 					} else {
-						hasLeader.Set(1)
+						hasLeader.Set(1) // 有 leader
 					}
 
 					rh.updateLead(rd.SoftState.Lead)
@@ -220,13 +220,14 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 				waitWALSync := shouldWaitWALSync(rd)
 				if waitWALSync {
 					// gofail: var raftBeforeSaveWaitWalSync struct{}
+					// 写 WAL 文件
 					if err := r.storage.Save(rd.HardState, rd.Entries); err != nil {
 						r.lg.Fatal("failed to save Raft hard state and entries", zap.Error(err))
 					}
 				}
 
 				select {
-				case r.applyc <- ap:
+				case r.applyc <- ap: // server.go#run() 从 chan 中获得消息
 				case <-r.stopped:
 					return
 				}
@@ -324,7 +325,7 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 					notifyc <- struct{}{}
 				}
 
-				r.Advance()
+				r.Advance() // n.advancec <- struct{}{} 告诉 raft，这批状态更新处理完了，状态已经往前更新了，可以给我下一批 Ready 让我处理
 			case <-r.stopped:
 				return
 			}
@@ -374,7 +375,7 @@ func updateCommittedIndex(ap *apply, rh *raftReadyHandler) {
 	if len(ap.entries) != 0 {
 		ci = ap.entries[len(ap.entries)-1].Index
 	}
-	if ap.snapshot.Metadata.Index > ci {
+	if ap.snapshot.Metadata.Index > ci { // 最大的 index 已经 snapshot 了
 		ci = ap.snapshot.Metadata.Index
 	}
 	if ci != 0 {

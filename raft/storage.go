@@ -37,6 +37,8 @@ var ErrUnavailable = errors.New("requested entry at index is unavailable")
 // snapshot is temporarily unavailable.
 var ErrSnapshotTemporarilyUnavailable = errors.New("snapshot is temporarily unavailable")
 
+// etcd 中的 raft 实现并不负责数据的持久化，
+// 所以它希望上面的应用层能实现这个接口，以便提供给它查询 log 的能力
 // Storage is an interface that may be implemented by the application
 // to retrieve log entries from storage.
 //
@@ -71,12 +73,13 @@ type Storage interface {
 	Snapshot() (pb.Snapshot, error)
 }
 
-// MemoryStorage implements the Storage interface backed by an
-// in-memory array.
+// MemoryStorage implements the Storage interface backed by an in-memory array.
+// MemoryStorage 实现了由内存数组支持的 Storage 接口
 type MemoryStorage struct {
 	// Protects access to all fields. Most methods of MemoryStorage are
-	// run on the raft goroutine, but Append() is run on an application
-	// goroutine.
+	// run on the raft goroutine, but Append() is run on an application goroutine.
+	// MemoryStorage 的大部分方式都是跑在 raft 协程，但是 Append() 方法跑在应用层协程，
+	// 因此需要 mutex 保护所有 field。
 	sync.Mutex
 
 	hardState pb.HardState

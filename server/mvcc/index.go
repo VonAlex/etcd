@@ -269,6 +269,7 @@ func (ti *treeIndex) Equal(bi index) bool {
 	return equal
 }
 
+// 存在多个 goroutine 同时插入的情况，因此需要加锁
 func (ti *treeIndex) Insert(ki *keyIndex) {
 	ti.Lock()
 	defer ti.Unlock()

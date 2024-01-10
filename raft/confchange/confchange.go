@@ -248,6 +248,7 @@ func (c Changer) remove(cfg *tracker.Config, prs tracker.ProgressMap, id uint64)
 }
 
 // initProgress initializes a new progress for the given node or learner.
+// id 是 Peer 的 id
 func (c Changer) initProgress(cfg *tracker.Config, prs tracker.ProgressMap, id uint64, isLearner bool) {
 	if !isLearner {
 		incoming(cfg.Voters)[id] = struct{}{}

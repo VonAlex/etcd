@@ -58,7 +58,7 @@ func (cfg *Config) setupLogging() error {
 				}
 			}
 		}
-		if cfg.EnableLogRotation {
+		if cfg.EnableLogRotation { // 日志切割
 			if err := setupLogRotation(cfg.LogOutputs, cfg.LogRotationConfigJSON); err != nil {
 				return err
 			}

@@ -64,7 +64,7 @@ func (e *encoder) encode(rec *walpb.Record) error {
 	defer e.mu.Unlock()
 
 	e.crc.Write(rec.Data)
-	rec.Crc = e.crc.Sum32()
+	rec.Crc = e.crc.Sum32() // 计算 crc
 	var (
 		data []byte
 		err  error
@@ -85,21 +85,23 @@ func (e *encoder) encode(rec *walpb.Record) error {
 	}
 
 	lenField, padBytes := encodeFrameSize(len(data))
+	// data 按照小端序写入 uint64buf，后续通过网络发送给其他节点
 	if err = writeUint64(e.bw, lenField, e.uint64buf); err != nil {
 		return err
 	}
 
 	if padBytes != 0 {
-		data = append(data, make([]byte, padBytes)...)
+		data = append(data, make([]byte, padBytes)...) // 填充 padding 数据
 	}
-	n, err = e.bw.Write(data)
-	walWriteBytes.Add(float64(n))
+	n, err = e.bw.Write(data)     //data 写入 buffer，后续落盘
+	walWriteBytes.Add(float64(n)) // 更新 metric
 	return err
 }
 
 func encodeFrameSize(dataBytes int) (lenField uint64, padBytes int) {
 	lenField = uint64(dataBytes)
 	// force 8 byte alignment so length never gets a torn write
+	// 强制 8 字节对齐，防止出现的不完整写入的情况
 	padBytes = (8 - (dataBytes % 8)) % 8
 	if padBytes != 0 {
 		lenField |= uint64(0x80|padBytes) << 56

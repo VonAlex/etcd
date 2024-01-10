@@ -43,6 +43,7 @@ type Storage interface {
 	Sync() error
 }
 
+// storage 负责持久化 wal 和 snapshot
 type storage struct {
 	*wal.WAL
 	*snap.Snapshotter

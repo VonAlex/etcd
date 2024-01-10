@@ -23,19 +23,19 @@ import (
 
 type raftLog struct {
 	// storage contains all stable entries since the last snapshot.
-	storage Storage
+	storage Storage // 已经持久化的
 
 	// unstable contains all unstable entries and snapshot.
 	// they will be saved into storage.
-	unstable unstable
+	unstable unstable // 还没有持久化的
 
 	// committed is the highest log position that is known to be in
 	// stable storage on a quorum of nodes.
-	committed uint64
+	committed uint64 // 保存当前提交的日志数据索引
 	// applied is the highest log position that the application has
 	// been instructed to apply to its state machine.
 	// Invariant: applied <= committed
-	applied uint64
+	applied uint64 // 保存当前传入状态机的数据最高索引
 
 	logger Logger
 
@@ -53,6 +53,8 @@ func newLog(storage Storage, logger Logger) *raftLog {
 
 // newLogWithSize returns a log using the given storage and max
 // message size.
+//
+// |--- MemoryStorage.snapshot ------|---- MemoryStorage.ents ------|-----unstable.ents---------|
 func newLogWithSize(storage Storage, logger Logger, maxNextEntsSize uint64) *raftLog {
 	if storage == nil {
 		log.Panic("storage must not be nil")
@@ -62,7 +64,7 @@ func newLogWithSize(storage Storage, logger Logger, maxNextEntsSize uint64) *raf
 		logger:          logger,
 		maxNextEntsSize: maxNextEntsSize,
 	}
-	firstIndex, err := storage.FirstIndex()
+	firstIndex, err := storage.FirstIndex() // MemoryStorage.ents数组的第一个数据索引
 	if err != nil {
 		panic(err) // TODO(bdarnell)
 	}
@@ -107,7 +109,7 @@ func (l *raftLog) append(ents ...pb.Entry) uint64 {
 	if len(ents) == 0 {
 		return l.lastIndex()
 	}
-	if after := ents[0].Index - 1; after < l.committed {
+	if after := ents[0].Index - 1; after < l.committed { // append entry index 不可能小于 commit index
 		l.logger.Panicf("after(%d) is out of range [committed(%d)]", after, l.committed)
 	}
 	l.unstable.truncateAndAppend(ents)
@@ -220,7 +222,7 @@ func (l *raftLog) firstIndex() uint64 {
 }
 
 func (l *raftLog) lastIndex() uint64 {
-	if i, ok := l.unstable.maybeLastIndex(); ok {
+	if i, ok := l.unstable.maybeLastIndex(); ok { // 如果有 unstable
 		return i
 	}
 	i, err := l.storage.LastIndex()

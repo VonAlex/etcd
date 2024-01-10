@@ -27,6 +27,8 @@ import (
 
 // a key-value store backed by raft
 type kvstore struct {
+	// proposeC: 应用和底层 raft 库之间的通信接口，
+	// 所有对应用的更新请求都会由应用通过该 channel 向底层 raft 库传递
 	proposeC    chan<- string // channel for proposing updates
 	mu          sync.RWMutex
 	kvStore     map[string]string // current committed key-value pairs
@@ -71,8 +73,8 @@ func (s *kvstore) Propose(k string, v string) {
 }
 
 func (s *kvstore) readCommits(commitC <-chan *commit, errorC <-chan error) {
-	for commit := range commitC {
-		if commit == nil {
+	for commit := range commitC { // 从 commit chan 中读取已提交的数据，
+		if commit == nil { // 读到 nil 数据，意思是加载 snapshot，并恢复数据
 			// signaled to load snapshot
 			snapshot, err := s.loadSnapshot()
 			if err != nil {
@@ -94,7 +96,7 @@ func (s *kvstore) readCommits(commitC <-chan *commit, errorC <-chan error) {
 				log.Fatalf("raftexample: could not decode message (%v)", err)
 			}
 			s.mu.Lock()
-			s.kvStore[dataKv.Key] = dataKv.Val
+			s.kvStore[dataKv.Key] = dataKv.Val // 应用到内存状态机 kvStore 中
 			s.mu.Unlock()
 		}
 		close(commit.applyDoneC)

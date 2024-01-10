@@ -43,6 +43,8 @@ type commit struct {
 }
 
 // A key-value stream backed by raft
+// 由 raft 支持的 kv 流,
+// 该结构是应用和底层 raft 核心库衔接的桥梁
 type raftNode struct {
 	proposeC    <-chan string            // proposed messages (k,v)
 	confChangeC <-chan raftpb.ConfChange // proposed cluster config changes
@@ -61,18 +63,18 @@ type raftNode struct {
 	appliedIndex  uint64
 
 	// raft backing for the commit/error channel
-	node        raft.Node
+	node        raft.Node // 对底层的 raft 组件的抽象
 	raftStorage *raft.MemoryStorage
-	wal         *wal.WAL
+	wal         *wal.WAL // etcd-raft 将日志的管理交给应用层来处理
 
-	snapshotter      *snap.Snapshotter
+	snapshotter      *snap.Snapshotter      // 将快照的管理交给应用层来处理
 	snapshotterReady chan *snap.Snapshotter // signals when snapshotter is ready
 
 	snapCount uint64
-	transport *rafthttp.Transport
-	stopc     chan struct{} // signals proposal channel closed
-	httpstopc chan struct{} // signals http server to shutdown
-	httpdonec chan struct{} // signals http server shutdown complete
+	transport *rafthttp.Transport // 应用同其他节点应用的网络传输接口，也交给应用层处理
+	stopc     chan struct{}       // signals proposal channel closed
+	httpstopc chan struct{}       // signals http server to shutdown
+	httpdonec chan struct{}       // signals http server shutdown complete
 
 	logger *zap.Logger
 }
@@ -188,7 +190,7 @@ func (rc *raftNode) publishEntries(ents []raftpb.Entry) (<-chan struct{}, bool) 
 	if len(data) > 0 {
 		applyDoneC = make(chan struct{}, 1)
 		select {
-		case rc.commitC <- &commit{data, applyDoneC}:
+		case rc.commitC <- &commit{data, applyDoneC}: // 发送给应用处理
 		case <-rc.stopc:
 			return nil, false
 		}
@@ -280,7 +282,7 @@ func (rc *raftNode) startRaft() {
 	rc.snapshotter = snap.New(zap.NewExample(), rc.snapdir)
 
 	oldwal := wal.Exist(rc.waldir)
-	rc.wal = rc.replayWAL()
+	rc.wal = rc.replayWAL() // 重放 WAL
 
 	// signal replay has finished
 	rc.snapshotterReady <- rc.snapshotter
@@ -322,8 +324,8 @@ func (rc *raftNode) startRaft() {
 		}
 	}
 
-	go rc.serveRaft()
-	go rc.serveChannels()
+	go rc.serveRaft()     // 主要是启动网络监听
+	go rc.serveChannels() // 等待请求提交
 }
 
 // stop closes http, closes all channels, and stops raft.
@@ -361,7 +363,7 @@ func (rc *raftNode) publishSnapshot(snapshotToSave raftpb.Snapshot) {
 var snapshotCatchUpEntriesN uint64 = 10000
 
 func (rc *raftNode) maybeTriggerSnapshot(applyDoneC <-chan struct{}) {
-	if rc.appliedIndex-rc.snapshotIndex <= rc.snapCount {
+	if rc.appliedIndex-rc.snapshotIndex <= rc.snapCount { // 如果更新数量不足,不创建snapshot
 		return
 	}
 
@@ -375,7 +377,7 @@ func (rc *raftNode) maybeTriggerSnapshot(applyDoneC <-chan struct{}) {
 	}
 
 	log.Printf("start snapshot [applied index: %d | last snapshot index: %d]", rc.appliedIndex, rc.snapshotIndex)
-	data, err := rc.getSnapshot()
+	data, err := rc.getSnapshot() // 生成内存状态机此刻状态
 	if err != nil {
 		log.Panic(err)
 	}
@@ -391,6 +393,7 @@ func (rc *raftNode) maybeTriggerSnapshot(applyDoneC <-chan struct{}) {
 	if rc.appliedIndex > snapshotCatchUpEntriesN {
 		compactIndex = rc.appliedIndex - snapshotCatchUpEntriesN
 	}
+	// 更新压缩 index
 	if err := rc.raftStorage.Compact(compactIndex); err != nil {
 		panic(err)
 	}
@@ -417,14 +420,14 @@ func (rc *raftNode) serveChannels() {
 	go func() {
 		confChangeCount := uint64(0)
 
-		for rc.proposeC != nil && rc.confChangeC != nil {
+		for rc.proposeC != nil && rc.confChangeC != nil { // 等待 propose 过来的请求
 			select {
 			case prop, ok := <-rc.proposeC:
 				if !ok {
 					rc.proposeC = nil
 				} else {
 					// blocks until accepted by raft state machine
-					rc.node.Propose(context.TODO(), []byte(prop))
+					rc.node.Propose(context.TODO(), []byte(prop)) // 提交到 raft 模块
 				}
 
 			case cc, ok := <-rc.confChangeC:
@@ -448,16 +451,17 @@ func (rc *raftNode) serveChannels() {
 			rc.node.Tick()
 
 		// store raft entries to wal, then publish over commit channel
-		case rd := <-rc.node.Ready():
+		case rd := <-rc.node.Ready(): // raft 模块处理完成
+			// 将 HardState，entries 写入持久化存储中
 			rc.wal.Save(rd.HardState, rd.Entries)
-			if !raft.IsEmptySnap(rd.Snapshot) {
+			if !raft.IsEmptySnap(rd.Snapshot) { // 如果快照数据不为空，也需要保存快照数据到持久化存储中
 				rc.saveSnap(rd.Snapshot)
 				rc.raftStorage.ApplySnapshot(rd.Snapshot)
 				rc.publishSnapshot(rd.Snapshot)
 			}
 			rc.raftStorage.Append(rd.Entries)
-			rc.transport.Send(rd.Messages)
-			applyDoneC, ok := rc.publishEntries(rc.entriesToApply(rd.CommittedEntries))
+			rc.transport.Send(rd.Messages)                                              // 发送网络消息给 peers
+			applyDoneC, ok := rc.publishEntries(rc.entriesToApply(rd.CommittedEntries)) // 将已经 commit 的日志提交到应用状态机
 			if !ok {
 				rc.stop()
 				return

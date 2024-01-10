@@ -246,6 +246,7 @@ type Config struct {
 	// (e.g. '5m' for 5-minute), or revision unit (e.g. '5000').
 	// If no time unit is provided and compaction mode is 'periodic',
 	// the unit defaults to hour. For example, '5' translates into 5-hour.
+	// 默认按时间周期做 compaction
 	AutoCompactionRetention string `json:"auto-compaction-retention"`
 
 	// GRPCKeepAliveMinTime is the minimum interval that a client should

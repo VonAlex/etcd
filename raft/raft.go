@@ -514,7 +514,7 @@ func (r *raft) sendHeartbeat(to uint64, ctx []byte) {
 // according to the progress recorded in r.prs.
 func (r *raft) bcastAppend() {
 	r.prs.Visit(func(id uint64, _ *tracker.Progress) {
-		if id == r.id {
+		if id == r.id { // skip myself
 			return
 		}
 		r.sendAppend(id)
@@ -621,8 +621,8 @@ func (r *raft) reset(term uint64) {
 func (r *raft) appendEntry(es ...pb.Entry) (accepted bool) {
 	li := r.raftLog.lastIndex()
 	for i := range es {
-		es[i].Term = r.Term
-		es[i].Index = li + 1 + uint64(i)
+		es[i].Term = r.Term              // 当前 term
+		es[i].Index = li + 1 + uint64(i) // 递增 index
 	}
 	// Track the size of this uncommitted proposal.
 	if !r.increaseUncommittedSize(es) {
@@ -972,7 +972,7 @@ func (r *raft) Step(m pb.Message) error {
 		}
 
 	default:
-		err := r.step(r, m)
+		err := r.step(r, m) // stepLeader/stepFollower/stepCandidate
 		if err != nil {
 			return err
 		}
@@ -1011,21 +1011,21 @@ func stepLeader(r *raft, m pb.Message) error {
 		})
 		return nil
 	case pb.MsgProp:
-		if len(m.Entries) == 0 {
+		if len(m.Entries) == 0 { // 不允许 propose 空消息
 			r.logger.Panicf("%x stepped empty MsgProp", r.id)
 		}
-		if r.prs.Progress[r.id] == nil {
+		if r.prs.Progress[r.id] == nil { // 节点不在集群里了，有可能是在配置变更的场景
 			// If we are not currently a member of the range (i.e. this node
 			// was removed from the configuration while serving as leader),
 			// drop any new proposals.
 			return ErrProposalDropped
 		}
-		if r.leadTransferee != None {
+		if r.leadTransferee != None { // 正在做 leader transfer，不能做 propose
 			r.logger.Debugf("%x [term %d] transfer leadership to %x is in progress; dropping proposal", r.id, r.Term, r.leadTransferee)
 			return ErrProposalDropped
 		}
 
-		for i := range m.Entries {
+		for i := range m.Entries { // 处理 conf 变更 propose
 			e := &m.Entries[i]
 			var cc pb.ConfChangeI
 			if e.Type == pb.EntryConfChange {
@@ -1067,7 +1067,7 @@ func stepLeader(r *raft, m pb.Message) error {
 		if !r.appendEntry(m.Entries...) {
 			return ErrProposalDropped
 		}
-		r.bcastAppend()
+		r.bcastAppend() // 向集群其他节点广播 append 消息
 		return nil
 	case pb.MsgReadIndex:
 		// only one voting member (the leader) in the cluster
@@ -1090,17 +1090,18 @@ func stepLeader(r *raft, m pb.Message) error {
 		return nil
 	}
 
+	// 以下是接受消息的处理逻辑
 	// All other message types require a progress for m.From (pr).
-	pr := r.prs.Progress[m.From]
+	pr := r.prs.Progress[m.From] // 检查消息发送者当前是否在集群中
 	if pr == nil {
 		r.logger.Debugf("%x no progress available for %x", r.id, m.From)
 		return nil
 	}
 	switch m.Type {
-	case pb.MsgAppResp:
-		pr.RecentActive = true
+	case pb.MsgAppResp: // 对 append 消息的应答
+		pr.RecentActive = true // peer 是活跃状态的
 
-		if m.Reject {
+		if m.Reject { // 如果拒绝了append消息，说明term、index不匹配
 			// RejectHint is the suggested next base entry for appending (i.e.
 			// we try to append entry RejectHint+1 next), and LogTerm is the
 			// term that the follower has at index RejectHint. Older versions
@@ -1221,15 +1222,17 @@ func stepLeader(r *raft, m pb.Message) error {
 				//    log.
 				nextProbeIdx = r.raftLog.findConflictByTerm(m.RejectHint, m.LogTerm)
 			}
-			if pr.MaybeDecrTo(m.Index, nextProbeIdx) {
+			if pr.MaybeDecrTo(m.Index, nextProbeIdx) { // 尝试回退关于该节点的Match、Next索引
 				r.logger.Debugf("%x decreased progress of %x to [%s]", r.id, m.From, pr)
 				if pr.State == tracker.StateReplicate {
 					pr.BecomeProbe()
 				}
-				r.sendAppend(m.From)
+				r.sendAppend(m.From) // 再次发送append消息
 			}
 		} else {
 			oldPaused := pr.IsPaused()
+			// 这个 index 是对端 raftLog.committed，即对端 commit 进度
+			// 根据这个信息更新这个节点的 Progress 进度
 			if pr.MaybeUpdate(m.Index) {
 				switch {
 				case pr.State == tracker.StateProbe:
@@ -1423,7 +1426,7 @@ func stepFollower(r *raft, m pb.Message) error {
 			return ErrProposalDropped
 		}
 		m.To = r.lead
-		r.send(m)
+		r.send(m) // follower 收到 propose 会转发给 leader，只有 leader 能处理写请求
 	case pb.MsgApp:
 		r.electionElapsed = 0
 		r.lead = m.From
@@ -1609,6 +1612,7 @@ func (r *raft) restore(s pb.Snapshot) bool {
 
 // promotable indicates whether state machine can be promoted to leader,
 // which is true when its own id is in progress list.
+// 是否可以被提升为 leader
 func (r *raft) promotable() bool {
 	pr := r.prs.Progress[r.id]
 	return pr != nil && !pr.IsLearner && !r.raftLog.hasPendingSnapshot()

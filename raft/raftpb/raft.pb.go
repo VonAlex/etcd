@@ -382,20 +382,20 @@ var xxx_messageInfo_Snapshot proto.InternalMessageInfo
 
 type Message struct {
 	Type MessageType `protobuf:"varint,1,opt,name=type,enum=raftpb.MessageType" json:"type"`
-	To   uint64      `protobuf:"varint,2,opt,name=to" json:"to"`
-	From uint64      `protobuf:"varint,3,opt,name=from" json:"from"`
-	Term uint64      `protobuf:"varint,4,opt,name=term" json:"term"`
+	To   uint64      `protobuf:"varint,2,opt,name=to" json:"to"` // 消息接收者的节点ID
+	From uint64      `protobuf:"varint,3,opt,name=from" json:"from"` // 消息发出者的节点ID
+	Term uint64      `protobuf:"varint,4,opt,name=term" json:"term"` // 当前任期ID
 	// logTerm is generally used for appending Raft logs to followers. For example,
 	// (type=MsgApp,index=100,logTerm=5) means leader appends entries starting at
 	// index=101, and the term of entry at index 100 is 5.
 	// (type=MsgAppResp,reject=true,index=100,logTerm=5) means follower rejects some
 	// entries from its leader as it already has an entry with term 5 at index 100.
-	LogTerm    uint64   `protobuf:"varint,5,opt,name=logTerm" json:"logTerm"`
-	Index      uint64   `protobuf:"varint,6,opt,name=index" json:"index"`
+	LogTerm    uint64   `protobuf:"varint,5,opt,name=logTerm" json:"logTerm"`// 消息发出者所保存的日志中最后一条的任期号，一般 MsgVote 会用到
+	Index      uint64   `protobuf:"varint,6,opt,name=index" json:"index"` // 日志索引号
 	Entries    []Entry  `protobuf:"bytes,7,rep,name=entries" json:"entries"`
-	Commit     uint64   `protobuf:"varint,8,opt,name=commit" json:"commit"`
-	Snapshot   Snapshot `protobuf:"bytes,9,opt,name=snapshot" json:"snapshot"`
-	Reject     bool     `protobuf:"varint,10,opt,name=reject" json:"reject"`
+	Commit     uint64   `protobuf:"varint,8,opt,name=commit" json:"commit"` // 已经提交的日志的索引值，用来向别人同步日志的提交信息
+	Snapshot   Snapshot `protobuf:"bytes,9,opt,name=snapshot" json:"snapshot"`// 一般跟 MsgSnap 合用，用来放置具体的 Snapshot 值
+	Reject     bool     `protobuf:"varint,10,opt,name=reject" json:"reject"` // 代表对方节点拒绝了当前节点的请求
 	RejectHint uint64   `protobuf:"varint,11,opt,name=rejectHint" json:"rejectHint"`
 	Context    []byte   `protobuf:"bytes,12,opt,name=context" json:"context,omitempty"`
 }
@@ -433,10 +433,11 @@ func (m *Message) XXX_DiscardUnknown() {
 
 var xxx_messageInfo_Message proto.InternalMessageInfo
 
+// HardState 与 SoftState 相反，需要写入持久化存储中
 type HardState struct {
-	Term   uint64 `protobuf:"varint,1,opt,name=term" json:"term"`
-	Vote   uint64 `protobuf:"varint,2,opt,name=vote" json:"vote"`
-	Commit uint64 `protobuf:"varint,3,opt,name=commit" json:"commit"`
+	Term   uint64 `protobuf:"varint,1,opt,name=term" json:"term"` // 当前任期
+	Vote   uint64 `protobuf:"varint,2,opt,name=vote" json:"vote"` // 已投票给谁
+	Commit uint64 `protobuf:"varint,3,opt,name=commit" json:"commit"` // 已提交的最后日志条目索引
 }
 
 func (m *HardState) Reset()         { *m = HardState{} }

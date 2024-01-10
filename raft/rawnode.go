@@ -29,6 +29,7 @@ var ErrStepLocalMsg = errors.New("raft: cannot step raft local message")
 var ErrStepPeerNotFound = errors.New("raft: cannot step as peer not found")
 
 // RawNode is a thread-unsafe Node.
+// RawNode 不是一个并发安全的 Node。
 // The methods of this struct correspond to the methods of Node and are described
 // more fully there.
 type RawNode struct {
@@ -148,6 +149,7 @@ func (rn *RawNode) acceptReady(rd Ready) {
 }
 
 // HasReady called when RawNode user need to check if any Ready pending.
+// 当 RawNode 使用者需要检查是否有 Ready pending 时调用 HasReady 函数。
 // Checking logic in this method should be consistent with Ready.containsUpdates().
 func (rn *RawNode) HasReady() bool {
 	r := rn.raft

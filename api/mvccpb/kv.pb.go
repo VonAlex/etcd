@@ -49,6 +49,7 @@ func (Event_EventType) EnumDescriptor() ([]byte, []int) {
 	return fileDescriptor_2216fe83c9c12408, []int{1, 0}
 }
 
+// boltdb 的 value 结构
 type KeyValue struct {
 	// key is the key in bytes. An empty key is not allowed.
 	Key []byte `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`

@@ -38,8 +38,10 @@ func main() {
 	getSnapshot := func() ([]byte, error) { return kvs.getSnapshot() }
 	commitC, errorC, snapshotterReady := newRaftNode(*id, strings.Split(*cluster, ","), *join, getSnapshot, proposeC, confChangeC)
 
+	// 初始化应用: 内存 kv 系统
 	kvs = newKVStore(<-snapshotterReady, proposeC, commitC, errorC)
 
 	// the key-value http handler will propose updates to raft
+	// 对外提供 http 服务
 	serveHttpKVAPI(kvs, *kvport, confChangeC, errorC)
 }

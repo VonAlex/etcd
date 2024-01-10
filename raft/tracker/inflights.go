@@ -37,6 +37,7 @@ type Inflights struct {
 func NewInflights(size int) *Inflights {
 	return &Inflights{
 		size: size,
+		// 暂时不分配内存，后面用到时动态分配，大部分场景下 buffer 长度要小于容量
 	}
 }
 
@@ -61,7 +62,7 @@ func (in *Inflights) Add(inflight uint64) {
 	if next >= size {
 		next -= size
 	}
-	if next >= len(in.buffer) {
+	if next >= len(in.buffer) { // 容量不够了，需要扩容
 		in.grow()
 	}
 	in.buffer[next] = inflight
@@ -85,14 +86,14 @@ func (in *Inflights) grow() {
 
 // FreeLE frees the inflights smaller or equal to the given `to` flight.
 func (in *Inflights) FreeLE(to uint64) {
-	if in.count == 0 || to < in.buffer[in.start] {
+	if in.count == 0 || to < in.buffer[in.start] { // 比窗口左边界还小
 		// out of the left side of the window
 		return
 	}
 
 	idx := in.start
 	var i int
-	for i = 0; i < in.count; i++ {
+	for i = 0; i < in.count; i++ { // 找到第一个比 to 大的 index
 		if to < in.buffer[idx] { // found the first large inflight
 			break
 		}
@@ -105,7 +106,7 @@ func (in *Inflights) FreeLE(to uint64) {
 	}
 	// free i inflights and set new start index
 	in.count -= i
-	in.start = idx
+	in.start = idx // 缩减窗口左边界
 	if in.count == 0 {
 		// inflights is empty, reset the start index so that we don't grow the
 		// buffer unnecessarily.

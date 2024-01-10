@@ -722,7 +722,7 @@ func resolveUrl(u url.URL) (addr string, secure bool, network string) {
 }
 
 func (e *Etcd) serveClients() (err error) {
-	if !e.cfg.ClientTLSInfo.Empty() {
+	if !e.cfg.ClientTLSInfo.Empty() { // 使用 tls
 		e.cfg.logger.Info(
 			"starting with client TLS",
 			zap.String("tls-info", fmt.Sprintf("%+v", e.cfg.ClientTLSInfo)),
@@ -884,7 +884,7 @@ func (e *Etcd) GetLogger() *zap.Logger {
 }
 
 func parseCompactionRetention(mode, retention string) (ret time.Duration, err error) {
-	h, err := strconv.Atoi(retention)
+	h, err := strconv.Atoi(retention) // e.g. 5m/5000
 	if err == nil && h >= 0 {
 		switch mode {
 		case CompactorModeRevision:

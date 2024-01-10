@@ -136,6 +136,7 @@ func (s *EtcdServer) Range(ctx context.Context, r *pb.RangeRequest) (*pb.RangeRe
 	return resp, err
 }
 
+// PUT 请求实现逻辑
 func (s *EtcdServer) Put(ctx context.Context, r *pb.PutRequest) (*pb.PutResponse, error) {
 	ctx = context.WithValue(ctx, traceutil.StartTimeKey, time.Now())
 	resp, err := s.raftRequest(ctx, pb.InternalRaftRequest{Put: r})
@@ -725,6 +726,7 @@ func (s *EtcdServer) doSerialize(ctx context.Context, chk func(*auth.AuthInfo) e
 func (s *EtcdServer) processInternalRaftRequestOnce(ctx context.Context, r pb.InternalRaftRequest) (*applyResult, error) {
 	ai := s.getAppliedIndex()
 	ci := s.getCommittedIndex()
+	// 限速检查：committedIndex 与 appliedIndex gap 阈值为 5000
 	if ci > ai+maxGapBetweenApplyAndCommitIndex {
 		return nil, ErrTooManyRequests
 	}
@@ -733,6 +735,7 @@ func (s *EtcdServer) processInternalRaftRequestOnce(ctx context.Context, r pb.In
 		ID: s.reqIDGen.Next(),
 	}
 
+	// 鉴权检查
 	// check authinfo if it is not InternalAuthenticateRequest
 	if r.Authenticate == nil {
 		authInfo, err := s.AuthInfoFromCtx(ctx)
@@ -750,6 +753,7 @@ func (s *EtcdServer) processInternalRaftRequestOnce(ctx context.Context, r pb.In
 		return nil, err
 	}
 
+	// 大包检查：默认 1.5M
 	if len(data) > int(s.Cfg.MaxRequestBytes) {
 		return nil, ErrRequestTooLarge
 	}
@@ -758,13 +762,13 @@ func (s *EtcdServer) processInternalRaftRequestOnce(ctx context.Context, r pb.In
 	if id == 0 {
 		id = r.Header.ID
 	}
-	ch := s.w.Register(id)
+	ch := s.w.Register(id) // 注册 chan，等待 response
 
 	cctx, cancel := context.WithTimeout(ctx, s.Cfg.ReqTimeout())
 	defer cancel()
 
 	start := time.Now()
-	err = s.r.Propose(cctx, data)
+	err = s.r.Propose(cctx, data) // 请求封装成 MsgProp 类型 message 传递给 raft 处理
 	if err != nil {
 		proposalsFailed.Inc()
 		s.w.Trigger(id, nil) // GC wait
@@ -828,7 +832,7 @@ func (s *EtcdServer) linearizableReadLoop() {
 
 		if appliedIndex < confirmedIndex {
 			select {
-			case <-s.applyWait.Wait(confirmedIndex):
+			case <-s.applyWait.Wait(confirmedIndex): // 等待本节点当前已经应用的 Raft 日志索引 >= leader 最新已提交的日志条目索引
 			case <-s.stopping:
 				return
 			}

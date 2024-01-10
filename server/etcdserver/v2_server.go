@@ -119,6 +119,7 @@ func (a *reqV2HandlerEtcdServer) processRaftRequest(ctx context.Context, r *Requ
 	return Response{}, ErrStopped
 }
 
+// 处理用户请求
 func (s *EtcdServer) Do(ctx context.Context, r pb.Request) (Response, error) {
 	r.ID = s.reqIDGen.Next()
 	h := &reqV2HandlerEtcdServer{

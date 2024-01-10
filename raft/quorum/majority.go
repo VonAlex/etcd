@@ -22,6 +22,7 @@ import (
 )
 
 // MajorityConfig is a set of IDs that uses majority quorums to make decisions.
+// MajorityConfig 是使用多数法定人数来做决策的一组 ID，其实就是 peerID 的 set
 type MajorityConfig map[uint64]struct{}
 
 func (c MajorityConfig) String() string {
@@ -131,19 +132,18 @@ func (c MajorityConfig) CommittedIndex(l AckedIndexer) Index {
 		return math.MaxUint64
 	}
 
-	// Use an on-stack slice to collect the committed indexes when n <= 7
-	// (otherwise we alloc). The alternative is to stash a slice on
-	// MajorityConfig, but this impairs usability (as is, MajorityConfig is just
-	// a map, and that's nice). The assumption is that running with a
-	// replication factor of >7 is rare, and in cases in which it happens
-	// performance is a lesser concern (additionally the performance
+	// Use an on-stack slice to collect the committed indexes when n <= 7 (otherwise we alloc).
+	// The alternative is to stash a slice on MajorityConfig,
+	// but this impairs usability (as is, MajorityConfig is just a map, and that's nice).
+	// The assumption is that running with a replication factor of >7 is rare,
+	// and in cases in which it happens performance is a lesser concern (additionally the performance
 	// implications of an allocation here are far from drastic).
 	var stk [7]uint64
 	var srt []uint64
 	if len(stk) >= n {
 		srt = stk[:n]
 	} else {
-		srt = make([]uint64, n)
+		srt = make([]uint64, n) // > 7
 	}
 
 	{
@@ -153,7 +153,7 @@ func (c MajorityConfig) CommittedIndex(l AckedIndexer) Index {
 		// the left after sorting below anyway).
 		i := n - 1
 		for id := range c {
-			if idx, ok := l.AckedIndex(id); ok {
+			if idx, ok := l.AckedIndex(id); ok { // 每个 follower ack index
 				srt[i] = uint64(idx)
 				i--
 			}
@@ -162,13 +162,13 @@ func (c MajorityConfig) CommittedIndex(l AckedIndexer) Index {
 
 	// Sort by index. Use a bespoke algorithm (copied from the stdlib's sort
 	// package) to keep srt on the stack.
-	insertionSort(srt)
+	insertionSort(srt) // 由大到小排序
 
 	// The smallest index into the array for which the value is acked by a
 	// quorum. In other words, from the end of the slice, move n/2+1 to the
 	// left (accounting for zero-indexing).
 	pos := n - (n/2 + 1)
-	return Index(srt[pos])
+	return Index(srt[pos]) // quorum follower index
 }
 
 // VoteResult takes a mapping of voters to yes/no (true/false) votes and returns

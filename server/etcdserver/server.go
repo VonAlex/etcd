@@ -200,6 +200,7 @@ type Server interface {
 }
 
 // EtcdServer is the production implementation of the Server interface
+// EtcdServer 是 Server 接口的生产实现，它是一个独立运行的 etcd 节点
 type EtcdServer struct {
 	// inflightSnapshots holds count the number of snapshots currently inflight.
 	inflightSnapshots int64  // must use atomic operations to access; keep 64-bit aligned.
@@ -339,7 +340,7 @@ func NewServer(cfg config.ServerConfig) (srv *EtcdServer, err error) {
 		cl *membership.RaftCluster
 	)
 
-	if cfg.MaxRequestBytes > recommendedMaxRequestBytes {
+	if cfg.MaxRequestBytes > recommendedMaxRequestBytes { // 推荐的最大请求大小为 10M
 		cfg.Logger.Warn(
 			"exceeded recommended request limit",
 			zap.Uint("max-request-bytes", cfg.MaxRequestBytes),
@@ -353,7 +354,7 @@ func NewServer(cfg config.ServerConfig) (srv *EtcdServer, err error) {
 		return nil, fmt.Errorf("cannot access data directory: %v", terr)
 	}
 
-	haveWAL := wal.Exist(cfg.WALDir())
+	haveWAL := wal.Exist(cfg.WALDir()) // 是否有 wal 文件
 
 	if err = fileutil.TouchDirAll(cfg.Logger, cfg.SnapDir()); err != nil {
 		cfg.Logger.Fatal(
@@ -382,7 +383,7 @@ func NewServer(cfg config.ServerConfig) (srv *EtcdServer, err error) {
 	beHooks := &backendHooks{lg: cfg.Logger, indexer: ci}
 	be := openBackend(cfg, beHooks)
 	ci.SetBackend(be)
-	cindex.CreateMetaBucket(be.BatchTx())
+	cindex.CreateMetaBucket(be.BatchTx()) // 创建 meta bucket
 
 	if cfg.ExperimentalBootstrapDefragThresholdMegabytes != 0 {
 		err := maybeDefragBackend(cfg, be)
@@ -469,6 +470,7 @@ func NewServer(cfg config.ServerConfig) (srv *EtcdServer, err error) {
 		cl.SetID(id, cl.ID())
 
 	case haveWAL:
+		// 相应目录是否可写
 		if err = fileutil.IsDirWriteable(cfg.MemberDir()); err != nil {
 			return nil, fmt.Errorf("cannot write to member directory: %v", err)
 		}

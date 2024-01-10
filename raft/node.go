@@ -37,6 +37,7 @@ var (
 
 // SoftState provides state that is useful for logging and debugging.
 // The state is volatile and does not need to be persisted to the WAL.
+// SoftState 提供了一些用于记录日志或调试的状态信息，它们都是瞬时值，不需要持久化到 WAL
 type SoftState struct {
 	Lead      uint64 // must use atomic operations to access; keep 64-bit aligned.
 	RaftState StateType
@@ -48,10 +49,10 @@ func (a *SoftState) equal(b *SoftState) bool {
 
 // Ready encapsulates the entries and messages that are ready to read,
 // be saved to stable storage, committed or sent to other peers.
-// All fields in Ready are read-only.
+// All fields in Ready are read-only. Ready 结构体所有的成员都是只读的
 type Ready struct {
 	// The current volatile state of a Node.
-	// SoftState will be nil if there is no update.
+	// SoftState will be nil if there is no update. 如果没有 update，则 SoftState 为 nil
 	// It is not required to consume or store SoftState.
 	*SoftState
 
@@ -68,24 +69,28 @@ type Ready struct {
 
 	// Entries specifies entries to be saved to stable storage BEFORE
 	// Messages are sent.
-	Entries []pb.Entry
+	Entries []pb.Entry // unstable.ents
 
 	// Snapshot specifies the snapshot to be saved to stable storage.
+	// 需要写入持久化存储中的快照数据
 	Snapshot pb.Snapshot
 
-	// CommittedEntries specifies entries to be committed to a
-	// store/state-machine. These have previously been committed to stable
-	// store.
+	// CommittedEntries specifies entries to be committed to a store/state-machine.
+	// These have previously been committed to stable store.
+	// 需要输入到状态机中的数据，这些数据之前已经被保存到持久化存储中了
 	CommittedEntries []pb.Entry
 
 	// Messages specifies outbound messages to be sent AFTER Entries are
 	// committed to stable storage.
+	// Messages 中保存了在 Entries 被提交到稳定存储后要发送的出站消息。
 	// If it contains a MsgSnap message, the application MUST report back to raft
 	// when the snapshot has been received or has failed by calling ReportSnapshot.
+	// 如果它包含一条 MsgSnap 消息，应用程序必须在 snapshot 被接收或失败时，通过调用 ReportSnapshot 方法向 Raft 报告回执。
 	Messages []pb.Message
 
 	// MustSync indicates whether the HardState and Entries must be synchronously
 	// written to disk or if an asynchronous write is permissible.
+	// 指定 HardState 和 Entries 是否同步写入磁盘
 	MustSync bool
 }
 
@@ -123,14 +128,19 @@ func (rd Ready) appliedCursor() uint64 {
 }
 
 // Node represents a node in a raft cluster.
+// raft cluster 的一个节点
 type Node interface {
-	// Tick increments the internal logical clock for the Node by a single tick. Election
-	// timeouts and heartbeat timeouts are in units of ticks.
+	// Tick increments the internal logical clock for the Node by a single tick.
+	// Election timeouts and heartbeat timeouts are in units of ticks.
+	// 逻辑时钟 tick
 	Tick()
 	// Campaign causes the Node to transition to candidate state and start campaigning to become leader.
+	// Campaign 促使 Node 变成 candidate 状态，并开始选举，竞争 leader
 	Campaign(ctx context.Context) error
 	// Propose proposes that data be appended to the log. Note that proposals can be lost without
 	// notice, therefore it is user's job to ensure proposal retries.
+	// proposes 写入数据到日志中。
+	// proposals 可能会因为各种原因丢失而无法在所有 raft 节点执行，因此确保 proposes 重试是用户（或者应用）的责任
 	Propose(ctx context.Context, data []byte) error
 	// ProposeConfChange proposes a configuration change. Like any proposal, the
 	// configuration change may be dropped with or without an error being
@@ -147,24 +157,33 @@ type Node interface {
 	ProposeConfChange(ctx context.Context, cc pb.ConfChangeI) error
 
 	// Step advances the state machine using the given message. ctx.Err() will be returned, if any.
+	// 将消息 msg 灌入状态机
 	Step(ctx context.Context, msg pb.Message) error
 
 	// Ready returns a channel that returns the current point-in-time state.
 	// Users of the Node must call Advance after retrieving the state returned by Ready.
+	// Ready 返回一个 channel，用于返回当前的状态。
+	// 在使用 Ready 获取状态后，必须先调用 Advance 函数。
 	//
 	// NOTE: No committed entries from the next Ready may be applied until all committed entries
 	// and snapshots from the previous one have finished.
+	// 直到完成了前面所有的 entry 和 snap 之后，才会 apply 已经提交的 entry
 	Ready() <-chan Ready
 
 	// Advance notifies the Node that the application has saved progress up to the last Ready.
 	// It prepares the node to return the next available Ready.
+	// Advance 通知节点，可靠地存储了直到最后一个 Ready 的进度。
 	//
 	// The application should generally call Advance after it applies the entries in last Ready.
+	// 通常应用应该在 apply 了最新的 Ready 里的 entry 之后调用 Advance 函数。
 	//
 	// However, as an optimization, the application may call Advance while it is applying the
 	// commands. For example. when the last Ready contains a snapshot, the application might take
 	// a long time to apply the snapshot data. To continue receiving Ready without blocking raft
 	// progress, it can call Advance before finishing applying the last ready.
+	// 然而，为了做优化，应用可以在 apply commands 时调用 Advance 函数。
+	// 例如，当最新的 Ready 中包含一个 snap，apply snap 数据可能会花很长的时间，
+	// 为了不阻塞继续接受 Ready，可以在 apply 最新一个 ready 结束前调用 Advance。
 	Advance()
 	// ApplyConfChange applies a config change (previously passed to
 	// ProposeConfChange) to the node. This must be called whenever a config
@@ -188,6 +207,7 @@ type Node interface {
 	ReadIndex(ctx context.Context, rctx []byte) error
 
 	// Status returns the current status of the raft state machine.
+	// 返回 raft 状态机当前的状态
 	Status() Status
 	// ReportUnreachable reports the given node is not reachable for the last send.
 	ReportUnreachable(id uint64)
@@ -251,12 +271,14 @@ type msgWithResult struct {
 }
 
 // node is the canonical implementation of the Node interface
+// node 是 Node 接口实现，应用层 etcdserver 与 raft 沟通的桥梁
+// 将应用层的消息传递给底层共识模块，并将底层共识模块共识后的结果反馈给应用层
 type node struct {
-	propc      chan msgWithResult
-	recvc      chan pb.Message
+	propc      chan msgWithResult // 用于本地提交日志
+	recvc      chan pb.Message    // 用于接收 peers 日志
 	confc      chan pb.ConfChangeV2
 	confstatec chan pb.ConfState
-	readyc     chan Ready
+	readyc     chan Ready // 用于本地 Raft 库通知应用层哪些数据已经准备好了
 	advancec   chan struct{}
 	tickc      chan struct{}
 	done       chan struct{}
@@ -299,6 +321,8 @@ func (n *node) Stop() {
 
 func (n *node) run() {
 	var propc chan msgWithResult
+	// 在 etcd 的实现中，node 不负责数据的持久化、网络消息的通信、以及将已经提交的 log 应用到状态机中，
+	// 所以，node使用 readyc 这个 channel 对外通知有数据要处理了，并将这些需要外部处理的数据打包到一个 Ready 结构体中
 	var readyc chan Ready
 	var advancec chan struct{}
 	var rd Ready
@@ -342,8 +366,9 @@ func (n *node) run() {
 		// TODO: maybe buffer the config propose if there exists one (the way
 		// described in raft dissertation)
 		// Currently it is dropped in Step silently.
+		// propc 和 recvc中拿到的是从上层应用传进来的消息，这个消息会被交给raft层的Step函数处理
 		case pm := <-propc:
-			m := pm.m
+			m := pm.m // message
 			m.From = r.id
 			err := r.Step(m)
 			if pm.result != nil {
@@ -473,7 +498,7 @@ func (n *node) stepWithWaitOption(ctx context.Context, m pb.Message, wait bool) 
 		pm.result = make(chan error, 1)
 	}
 	select {
-	case ch <- pm:
+	case ch <- pm: // 提交到 propose channel
 		if !wait {
 			return nil
 		}
@@ -483,13 +508,13 @@ func (n *node) stepWithWaitOption(ctx context.Context, m pb.Message, wait bool) 
 		return ErrStopped
 	}
 	select {
-	case err := <-pm.result:
+	case err := <-pm.result: // 是否有错误
 		if err != nil {
 			return err
 		}
-	case <-ctx.Done():
+	case <-ctx.Done(): // 超时或者完成
 		return ctx.Err()
-	case <-n.done:
+	case <-n.done: // 停服
 		return ErrStopped
 	}
 	return nil
@@ -558,9 +583,9 @@ func (n *node) ReadIndex(ctx context.Context, rctx []byte) error {
 
 func newReady(r *raft, prevSoftSt *SoftState, prevHardSt pb.HardState) Ready {
 	rd := Ready{
-		Entries:          r.raftLog.unstableEntries(),
-		CommittedEntries: r.raftLog.nextEnts(),
-		Messages:         r.msgs,
+		Entries:          r.raftLog.unstableEntries(), // 保存没有持久化的数据数组
+		CommittedEntries: r.raftLog.nextEnts(),        // 保存committed但是还没有applied的数据数组
+		Messages:         r.msgs,                      // 保存待发送的消息
 	}
 	if softSt := r.softState(); !softSt.equal(prevSoftSt) {
 		rd.SoftState = softSt

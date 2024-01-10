@@ -68,6 +68,7 @@ func openSnapshotBackend(cfg config.ServerConfig, ss *snap.Snapshotter, snapshot
 }
 
 // openBackend returns a backend using the current etcd db.
+// 返回一个打开的 backend，用于写 boltdb
 func openBackend(cfg config.ServerConfig, hooks backend.Hooks) backend.Backend {
 	fn := cfg.BackendPath()
 
