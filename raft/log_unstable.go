@@ -25,10 +25,13 @@ type unstable struct { // 没有被用户层持久化的数据
 	// 快照数据仅当当前节点在接收从leader发送过来的快照数据时存在，
 	// 在接收快照数据的时候，entries数组中是没有数据的
 	// 即 snapshot 和 entries 数组同一时间只有一个部分存在
-	snapshot *pb.Snapshot //
+	snapshot *pb.Snapshot
 	// all entries that have not yet been written to storage.
 	entries []pb.Entry
-	offset  uint64 // entries 数组中的第一条数据在 raft 日志中的索引
+
+	// 第一个 unstable entry 的索引，不能直接用 entries[0].Index，
+	// 因为 entries 有可能为空，如刚启动，日志持久化完成时等时刻
+	offset uint64
 
 	logger Logger
 }
@@ -44,6 +47,7 @@ func (u *unstable) maybeFirstIndex() (uint64, bool) {
 
 // maybeLastIndex returns the last index if it has at least one
 // unstable entry or snapshot.
+// 获取最后一条日志的索引
 func (u *unstable) maybeLastIndex() (uint64, bool) {
 	if l := len(u.entries); l != 0 {
 		return u.offset + uint64(l) - 1, true
@@ -54,10 +58,9 @@ func (u *unstable) maybeLastIndex() (uint64, bool) {
 	return 0, false
 }
 
-// maybeTerm returns the term of the entry at index i, if there
-// is any.
+// maybeTerm returns the term of the entry at index i, if there is any.
 func (u *unstable) maybeTerm(i uint64) (uint64, bool) {
-	if i < u.offset {
+	if i < u.offset { // 查找快照
 		if u.snapshot != nil && u.snapshot.Metadata.Index == i {
 			return u.snapshot.Metadata.Term, true
 		}
@@ -68,7 +71,7 @@ func (u *unstable) maybeTerm(i uint64) (uint64, bool) {
 	if !ok {
 		return 0, false
 	}
-	if i > last {
+	if i > last { // 超出了最大范围
 		return 0, false
 	}
 
@@ -122,21 +125,19 @@ func (u *unstable) restore(s pb.Snapshot) {
 }
 
 func (u *unstable) truncateAndAppend(ents []pb.Entry) {
-	after := ents[0].Index // 先拿到这些数据的第一个索引
+	after := ents[0].Index
 	switch {
 	case after == u.offset+uint64(len(u.entries)):
-		// 如果正好是紧接着当前数据的，就直接 append
 		// after is the next index in the u.entries
 		// directly append
 		u.entries = append(u.entries, ents...)
 	case after <= u.offset:
-		// 如果比当前偏移量小，那用新的数据替换当前数据，需要同时更改offset和entries
 		u.logger.Infof("replace the unstable entries from index %d", after)
 		// The log is being truncated to before our current offset
 		// portion, so set the offset and replace the entries
 		u.offset = after
 		u.entries = ents
-	default:
+	default: // 有重叠的日志
 		// truncate to after and copy to u.entries
 		// then append
 		u.logger.Infof("truncate the unstable entries before index %d", after)
@@ -145,6 +146,7 @@ func (u *unstable) truncateAndAppend(ents []pb.Entry) {
 	}
 }
 
+// 截取（lo，hi]的日志
 func (u *unstable) slice(lo uint64, hi uint64) []pb.Entry {
 	u.mustCheckOutOfBounds(lo, hi)
 	return u.entries[lo-u.offset : hi-u.offset]

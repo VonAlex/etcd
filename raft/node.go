@@ -67,9 +67,8 @@ type Ready struct {
 	// The returned is only valid for the request that requested to read.
 	ReadStates []ReadState
 
-	// Entries specifies entries to be saved to stable storage BEFORE
-	// Messages are sent.
-	Entries []pb.Entry // unstable.ents
+	// Entries specifies entries to be saved to stable storage BEFORE Messages are sent.
+	Entries []pb.Entry // 数据来自 unstable.ents
 
 	// Snapshot specifies the snapshot to be saved to stable storage.
 	// 需要写入持久化存储中的快照数据
@@ -82,7 +81,8 @@ type Ready struct {
 
 	// Messages specifies outbound messages to be sent AFTER Entries are
 	// committed to stable storage.
-	// Messages 中保存了在 Entries 被提交到稳定存储后要发送的出站消息。
+	// Messages 是需要发送给其他节点的消息，raft负责封装消息但不负责发送消息，消息发送需要使用者来实现。
+
 	// If it contains a MsgSnap message, the application MUST report back to raft
 	// when the snapshot has been received or has failed by calling ReportSnapshot.
 	// 如果它包含一条 MsgSnap 消息，应用程序必须在 snapshot 被接收或失败时，通过调用 ReportSnapshot 方法向 Raft 报告回执。
@@ -322,13 +322,14 @@ func (n *node) Stop() {
 func (n *node) run() {
 	var propc chan msgWithResult
 	// 在 etcd 的实现中，node 不负责数据的持久化、网络消息的通信、以及将已经提交的 log 应用到状态机中，
-	// 所以，node使用 readyc 这个 channel 对外通知有数据要处理了，并将这些需要外部处理的数据打包到一个 Ready 结构体中
+	// 所以，node 使用 readyc 这个 channel 对外通知有数据要处理了，并将这些需要外部处理的数据打包到一个 Ready 结构体中
 	var readyc chan Ready
 	var advancec chan struct{}
 	var rd Ready
 
 	r := n.rn.raft
 
+	// 初始状态不知道谁是 leader，需要通过 Ready 获取
 	lead := None
 
 	for {
@@ -344,7 +345,7 @@ func (n *node) run() {
 			// it simplifies testing (by emitting less frequently and more
 			// predictably).
 			rd = n.rn.readyWithoutAccept()
-			readyc = n.readyc
+			readyc = n.readyc // 一次只能处理一个 ready
 		}
 
 		if lead != r.lead {
@@ -366,7 +367,7 @@ func (n *node) run() {
 		// TODO: maybe buffer the config propose if there exists one (the way
 		// described in raft dissertation)
 		// Currently it is dropped in Step silently.
-		// propc 和 recvc中拿到的是从上层应用传进来的消息，这个消息会被交给raft层的Step函数处理
+		// propc/recvc 中拿到的是从上层应用传进来的消息
 		case pm := <-propc:
 			m := pm.m // message
 			m.From = r.id
@@ -413,7 +414,7 @@ func (n *node) run() {
 			}
 		case <-n.tickc:
 			n.rn.Tick()
-		case readyc <- rd:
+		case readyc <- rd: // readyc 是无缓存 channel，被处理后才可以继续放入 ready
 			n.rn.acceptReady(rd)
 			advancec = n.advancec
 		case <-advancec:
@@ -429,8 +430,8 @@ func (n *node) run() {
 	}
 }
 
-// Tick increments the internal logical clock for this Node. Election timeouts
-// and heartbeat timeouts are in units of ticks.
+// Tick increments the internal logical clock for this Node.
+// Election timeouts and heartbeat timeouts are in units of ticks.
 func (n *node) Tick() {
 	select {
 	case n.tickc <- struct{}{}:
@@ -479,10 +480,9 @@ func (n *node) stepWait(ctx context.Context, m pb.Message) error {
 	return n.stepWithWaitOption(ctx, m, true)
 }
 
-// Step advances the state machine using msgs. The ctx.Err() will be returned,
-// if any.
+// Step advances the state machine using msgs. The ctx.Err() will be returned, if any.
 func (n *node) stepWithWaitOption(ctx context.Context, m pb.Message, wait bool) error {
-	if m.Type != pb.MsgProp {
+	if m.Type != pb.MsgProp { // 所有的非 pb.MsgProp 消息通过 recvc 送给 node 处理
 		select {
 		case n.recvc <- m:
 			return nil
@@ -492,14 +492,16 @@ func (n *node) stepWithWaitOption(ctx context.Context, m pb.Message, wait bool) 
 			return ErrStopped
 		}
 	}
+
+	// 只有 pb.MsgProp 的消息才会通过 propc 送给 node 处理
 	ch := n.propc
 	pm := msgWithResult{m: m}
-	if wait {
+	if wait { // 如果使用者在乎返回值，那么就要创建一个chan来获取返回的错误
 		pm.result = make(chan error, 1)
 	}
 	select {
-	case ch <- pm: // 提交到 propose channel
-		if !wait {
+	case ch <- pm: // 向 node 提交请求
+		if !wait { // 如果不在乎返回值直接返回
 			return nil
 		}
 	case <-ctx.Done():
@@ -507,14 +509,14 @@ func (n *node) stepWithWaitOption(ctx context.Context, m pb.Message, wait bool) 
 	case <-n.done:
 		return ErrStopped
 	}
-	select {
+	select { // 获取返回值
 	case err := <-pm.result: // 是否有错误
 		if err != nil {
 			return err
 		}
 	case <-ctx.Done(): // 超时或者完成
 		return ctx.Err()
-	case <-n.done: // 停服
+	case <-n.done:
 		return ErrStopped
 	}
 	return nil
@@ -524,6 +526,7 @@ func (n *node) Ready() <-chan Ready { return n.readyc }
 
 func (n *node) Advance() {
 	select {
+	// 向advancec发送数据，利用done避免死锁
 	case n.advancec <- struct{}{}:
 	case <-n.done:
 	}
@@ -583,9 +586,9 @@ func (n *node) ReadIndex(ctx context.Context, rctx []byte) error {
 
 func newReady(r *raft, prevSoftSt *SoftState, prevHardSt pb.HardState) Ready {
 	rd := Ready{
-		Entries:          r.raftLog.unstableEntries(), // 保存没有持久化的数据数组
-		CommittedEntries: r.raftLog.nextEnts(),        // 保存committed但是还没有applied的数据数组
-		Messages:         r.msgs,                      // 保存待发送的消息
+		Entries:          r.raftLog.unstableEntries(), // unstable 日志等待应用层持久化，stepxx 函数 append
+		CommittedEntries: r.raftLog.nextEnts(),        // committed 日志等待应用层 apply
+		Messages:         r.msgs,                      // 待发送的消息,stepxx 函数 append
 	}
 	if softSt := r.softState(); !softSt.equal(prevSoftSt) {
 		rd.SoftState = softSt

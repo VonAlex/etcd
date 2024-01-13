@@ -23,18 +23,21 @@ import (
 
 type raftLog struct {
 	// storage contains all stable entries since the last snapshot.
-	storage Storage // 已经持久化的
+	// 从最后一次 snapshot 到现在的所有可靠的（stable）日志（Entry)，即保存 snapshot 之后提交的数据
+	// storage 可以看成是持久化存储日志的 cache
+	storage Storage
 
 	// unstable contains all unstable entries and snapshot.
 	// they will be saved into storage.
-	unstable unstable // 还没有持久化的
+	unstable unstable // 还没有持久化的 entries 和快照
 
 	// committed is the highest log position that is known to be in
 	// stable storage on a quorum of nodes.
-	committed uint64 // 保存当前提交的日志数据索引
+	committed uint64 // 写入持久化存储 storage 中的最高 index
 	// applied is the highest log position that the application has
 	// been instructed to apply to its state machine.
 	// Invariant: applied <= committed
+	// 已经提交的日志要被使用者应用，applied 就是该节点已经被应用的最大索引
 	applied uint64 // 保存当前传入状态机的数据最高索引
 
 	logger Logger
@@ -64,7 +67,7 @@ func newLogWithSize(storage Storage, logger Logger, maxNextEntsSize uint64) *raf
 		logger:          logger,
 		maxNextEntsSize: maxNextEntsSize,
 	}
-	firstIndex, err := storage.FirstIndex() // MemoryStorage.ents数组的第一个数据索引
+	firstIndex, err := storage.FirstIndex() // MemoryStorage.ents数组的第一个日志索引
 	if err != nil {
 		panic(err) // TODO(bdarnell)
 	}
@@ -180,6 +183,9 @@ func (l *raftLog) unstableEntries() []pb.Entry {
 // If applied is smaller than the index of snapshot, it returns all committed
 // entries after the index of snapshot.
 func (l *raftLog) nextEnts() (ents []pb.Entry) {
+	// 如果 l.applied+1 <= l.firstIndex()，
+	// 那么这个范围内的日志条目可能已经被删除或覆盖了，
+	// 例如通过日志压缩、快照创建和应用等操作。这些日志已经不再存在于当前的日志存储中，并且肯定已经被状态机应用过
 	off := max(l.applied+1, l.firstIndex())
 	if l.committed+1 > off {
 		ents, err := l.slice(off, l.committed+1, l.maxNextEntsSize)
@@ -252,6 +258,8 @@ func (l *raftLog) appliedTo(i uint64) {
 	l.applied = i
 }
 
+// 使用者告知 raftLog 日志已经持久化到哪个索引了
+// 更新 unstable ents，更新 offset
 func (l *raftLog) stableTo(i, t uint64) { l.unstable.stableTo(i, t) }
 
 func (l *raftLog) stableSnapTo(i uint64) { l.unstable.stableSnapTo(i) }
@@ -339,6 +347,7 @@ func (l *raftLog) restore(s pb.Snapshot) {
 }
 
 // slice returns a slice of log entries from lo through hi-1, inclusive.
+// 获取 (lo，hi] 的所有日志，但是总量限制在 maxSize
 func (l *raftLog) slice(lo, hi, maxSize uint64) ([]pb.Entry, error) {
 	err := l.mustCheckOutOfBounds(lo, hi)
 	if err != nil {

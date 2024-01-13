@@ -174,7 +174,7 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 			select {
 			case <-r.ticker.C:
 				r.tick()
-			case rd := <-r.Ready():
+			case rd := <-r.Ready(): // raft#node.go 放入 ready
 				if rd.SoftState != nil {
 					newLeader := rd.SoftState.Lead != raft.None && rh.getLead() != rd.SoftState.Lead
 					if newLeader {
@@ -210,7 +210,7 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 
 				notifyc := make(chan struct{}, 1)
 				ap := apply{
-					entries:  rd.CommittedEntries,
+					entries:  rd.CommittedEntries, // 需要 apply 的 entries
 					snapshot: rd.Snapshot,
 					notifyc:  notifyc,
 				}
@@ -220,8 +220,7 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 				waitWALSync := shouldWaitWALSync(rd)
 				if waitWALSync {
 					// gofail: var raftBeforeSaveWaitWalSync struct{}
-					// 写 WAL 文件
-					if err := r.storage.Save(rd.HardState, rd.Entries); err != nil {
+					if err := r.storage.Save(rd.HardState, rd.Entries); err != nil { // 写 unstabel entry 写入 WAL 文件
 						r.lg.Fatal("failed to save Raft hard state and entries", zap.Error(err))
 					}
 				}
@@ -284,7 +283,7 @@ func (r *raftNode) start(rh *raftReadyHandler) {
 					// gofail: var raftAfterWALRelease struct{}
 				}
 
-				r.raftStorage.Append(rd.Entries)
+				r.raftStorage.Append(rd.Entries) // unstable -> stable
 
 				if !islead {
 					// finish processing incoming messages before we signal raftdone chan
@@ -375,7 +374,7 @@ func updateCommittedIndex(ap *apply, rh *raftReadyHandler) {
 	if len(ap.entries) != 0 {
 		ci = ap.entries[len(ap.entries)-1].Index
 	}
-	if ap.snapshot.Metadata.Index > ci { // 最大的 index 已经 snapshot 了
+	if ap.snapshot.Metadata.Index > ci { // 最大的 index 已经在 snapshot 了
 		ci = ap.snapshot.Metadata.Index
 	}
 	if ci != 0 {

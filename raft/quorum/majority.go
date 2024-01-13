@@ -183,9 +183,10 @@ func (c MajorityConfig) VoteResult(votes map[uint64]bool) VoteResult {
 		return VoteWon
 	}
 
+	// 统计支持者(nv[1])和反对者(nv[0])的数量
 	ny := [2]int{} // vote counts for no and yes, respectively
 
-	var missing int
+	var missing int //  当然还有弃权的，raft的弃权不是peer主动弃权的，而是丢包或者超时造成的
 	for id := range c {
 		v, ok := votes[id]
 		if !ok {
@@ -200,11 +201,11 @@ func (c MajorityConfig) VoteResult(votes map[uint64]bool) VoteResult {
 	}
 
 	q := len(c)/2 + 1
-	if ny[1] >= q {
+	if ny[1] >= q { // 支持者超过一半代表选举胜利
 		return VoteWon
 	}
-	if ny[1]+missing >= q {
+	if ny[1]+missing >= q { // 支持者和弃权数量超过一半以上选举挂起，因为可能还有一部分票还在路上
 		return VotePending
 	}
-	return VoteLost
+	return VoteLost // 反对者超过一半以上肯定就失败了
 }

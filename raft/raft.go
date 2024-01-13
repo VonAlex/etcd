@@ -438,7 +438,7 @@ func (r *raft) maybeSendAppend(to uint64, sendIfEmpty bool) bool {
 	m.To = to
 
 	term, errt := r.raftLog.term(pr.Next - 1)
-	ents, erre := r.raftLog.entries(pr.Next, r.maxMsgSize)
+	ents, erre := r.raftLog.entries(pr.Next, r.maxMsgSize) // 本地发送 entry 范围 [pr.Next, lastIndex]
 	if len(ents) == 0 && !sendIfEmpty {
 		return false
 	}
@@ -472,14 +472,14 @@ func (r *raft) maybeSendAppend(to uint64, sendIfEmpty bool) bool {
 		m.Index = pr.Next - 1
 		m.LogTerm = term
 		m.Entries = ents
-		m.Commit = r.raftLog.committed
+		m.Commit = r.raftLog.committed // 本节点 commit 进度
 		if n := len(m.Entries); n != 0 {
 			switch pr.State {
 			// optimistically increase the next when in StateReplicate
 			case tracker.StateReplicate:
 				last := m.Entries[n-1].Index
 				pr.OptimisticUpdate(last)
-				pr.Inflights.Add(last)
+				pr.Inflights.Add(last) // 最后一个 entry index 添加到滑动窗口
 			case tracker.StateProbe:
 				pr.ProbeSent = true
 			default:
@@ -487,7 +487,7 @@ func (r *raft) maybeSendAppend(to uint64, sendIfEmpty bool) bool {
 			}
 		}
 	}
-	r.send(m)
+	r.send(m) // m 添加到 r.msgs
 	return true
 }
 
@@ -541,7 +541,7 @@ func (r *raft) bcastHeartbeatWithCtx(ctx []byte) {
 }
 
 func (r *raft) advance(rd Ready) {
-	r.reduceUncommittedSize(rd.CommittedEntries)
+	r.reduceUncommittedSize(rd.CommittedEntries) // 更新 uncommittedSize
 
 	// If entries were applied (or a snapshot), update our cursor for
 	// the next Ready. Note that if the current HardState contains a
@@ -549,7 +549,7 @@ func (r *raft) advance(rd Ready) {
 	// all of the new entries due to commit pagination by size.
 	if newApplied := rd.appliedCursor(); newApplied > 0 {
 		oldApplied := r.raftLog.applied
-		r.raftLog.appliedTo(newApplied)
+		r.raftLog.appliedTo(newApplied) // apply index 更新到 committed index
 
 		if r.prs.Config.AutoLeave && oldApplied <= r.pendingConfIndex && newApplied >= r.pendingConfIndex && r.state == StateLeader {
 			// If the current (and most recent, at least for this leader's term)
@@ -572,7 +572,7 @@ func (r *raft) advance(rd Ready) {
 
 	if len(rd.Entries) > 0 {
 		e := rd.Entries[len(rd.Entries)-1]
-		r.raftLog.stableTo(e.Index, e.Term)
+		r.raftLog.stableTo(e.Index, e.Term) // unstable entry 在 raftNode#start() 中写入了 WAL
 	}
 	if !IsEmptySnap(rd.Snapshot) {
 		r.raftLog.stableSnapTo(rd.Snapshot.Metadata.Index)
@@ -584,7 +584,7 @@ func (r *raft) advance(rd Ready) {
 // r.bcastAppend).
 func (r *raft) maybeCommit() bool {
 	mci := r.prs.Committed()
-	return r.raftLog.maybeCommit(mci, r.Term)
+	return r.raftLog.maybeCommit(mci, r.Term) // 本地 commit，更新 committed 到 mci
 }
 
 func (r *raft) reset(term uint64) {
