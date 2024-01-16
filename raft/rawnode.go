@@ -30,8 +30,9 @@ var ErrStepPeerNotFound = errors.New("raft: cannot step as peer not found")
 
 // RawNode is a thread-unsafe Node.
 // RawNode 不是一个并发安全的 Node。
-// The methods of this struct correspond to the methods of Node and are described
-// more fully there.
+// The methods of this struct correspond to the methods of Node and are described more fully there.
+// rawnode 将 Node 接口中相关的方法转为对 raft 结构体的方法的调用。
+// rawnode 是为需要实现 Multi-Raft 的开发者提供的更底层的接口。
 type RawNode struct {
 	raft       *raft
 	prevSoftSt *SoftState
@@ -226,6 +227,7 @@ func (rn *RawNode) ReportUnreachable(id uint64) {
 func (rn *RawNode) ReportSnapshot(id uint64, status SnapshotStatus) {
 	rej := status == SnapshotFailure
 
+	// 将一条 MsgSnapStatus 消息应用给 leader 状态机
 	_ = rn.raft.Step(pb.Message{Type: pb.MsgSnapStatus, From: id, Reject: rej})
 }
 

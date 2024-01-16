@@ -282,8 +282,7 @@ type raft struct {
 
 	readOnly *readOnly
 
-	// number of ticks since it reached last electionTimeout when it is leader
-	// or candidate.
+	// number of ticks since it reached last electionTimeout when it is leader or candidate.
 	// number of ticks since it reached last electionTimeout or received a
 	// valid message from current leader when it is a follower.
 	electionElapsed int
@@ -297,13 +296,12 @@ type raft struct {
 
 	heartbeatTimeout int
 	electionTimeout  int
-	// randomizedElectionTimeout is a random number between
-	// [electiontimeout, 2 * electiontimeout - 1]. It gets reset
-	// when raft changes its state to follower or candidate.
+	// randomizedElectionTimeout is a random number between [electiontimeout, 2 * electiontimeout - 1].
+	// It gets reset when raft changes its state to follower or candidate.
 	randomizedElectionTimeout int
 	disableProposalForwarding bool
 
-	tick func()
+	tick func() // tickElection/tickHeartbeat
 	step stepFunc
 
 	logger Logger
@@ -439,12 +437,12 @@ func (r *raft) maybeSendAppend(to uint64, sendIfEmpty bool) bool {
 
 	term, errt := r.raftLog.term(pr.Next - 1)
 	ents, erre := r.raftLog.entries(pr.Next, r.maxMsgSize) // 本地发送 entry 范围 [pr.Next, lastIndex]
-	if len(ents) == 0 && !sendIfEmpty {
+	if len(ents) == 0 && !sendIfEmpty {                    // entry 为空，且不需要发送，直接返回，部分场景需要发送空 entry
 		return false
 	}
 
 	if errt != nil || erre != nil { // send snapshot if we failed to get term or entries
-		if !pr.RecentActive {
+		if !pr.RecentActive { // 如果该 follower 不活跃，则不会为其发送快照
 			r.logger.Debugf("ignore sending snapshot to %x since it is not recently active", to)
 			return false
 		}
@@ -465,7 +463,7 @@ func (r *raft) maybeSendAppend(to uint64, sendIfEmpty bool) bool {
 		sindex, sterm := snapshot.Metadata.Index, snapshot.Metadata.Term
 		r.logger.Debugf("%x [firstindex: %d, commit: %d] sent snapshot[index: %d, term: %d] to %x [%s]",
 			r.id, r.raftLog.firstIndex(), r.raftLog.committed, sindex, sterm, to, pr)
-		pr.BecomeSnapshot(sindex)
+		pr.BecomeSnapshot(sindex) // 将该 follower 的状态转为 StateSnapshot，以阻塞该节点后续的 MsgApp 消息
 		r.logger.Debugf("%x paused sending replication messages to %x [%s]", r.id, to, pr)
 	} else {
 		m.Type = pb.MsgApp
@@ -481,12 +479,14 @@ func (r *raft) maybeSendAppend(to uint64, sendIfEmpty bool) bool {
 				pr.OptimisticUpdate(last)
 				pr.Inflights.Add(last) // 最后一个 entry index 添加到滑动窗口
 			case tracker.StateProbe:
-				pr.ProbeSent = true
+				pr.ProbeSent = true // 阻塞后续的消息，直到收到确认
 			default:
 				r.logger.Panicf("%x is sending append in unhandled state %s", r.id, pr.State)
 			}
 		}
 	}
+	// 由于 etcd/raft 不负责通信模块，因此这里不会真正发送，
+	// 而是通过 Ready 结构体将需要发送的消息交给 etcd/raft 的使用者处理。
 	r.send(m) // m 添加到 r.msgs
 	return true
 }
@@ -603,13 +603,13 @@ func (r *raft) reset(term uint64) {
 	r.prs.ResetVotes()
 	r.prs.Visit(func(id uint64, pr *tracker.Progress) {
 		*pr = tracker.Progress{
-			Match:     0,
+			Match:     0, // 暂时不知道 follower 的复制进度，初始化为 0
 			Next:      r.raftLog.lastIndex() + 1,
 			Inflights: tracker.NewInflights(r.prs.MaxInflight),
 			IsLearner: pr.IsLearner,
 		}
 		if id == r.id {
-			pr.Match = r.raftLog.lastIndex()
+			pr.Match = r.raftLog.lastIndex() // 将自己的 match index 置为自己的 last index
 		}
 	})
 
@@ -645,8 +645,8 @@ func (r *raft) appendEntry(es ...pb.Entry) (accepted bool) {
 func (r *raft) tickElection() {
 	r.electionElapsed++
 
-	if r.promotable() && r.pastElectionTimeout() {
-		r.electionElapsed = 0
+	if r.promotable() && r.pastElectionTimeout() { // 可以被提升为 leader 且超过了选举超时
+		r.electionElapsed = 0 // 重置计数器
 		r.Step(pb.Message{From: r.id, Type: pb.MsgHup})
 	}
 }
@@ -721,7 +721,7 @@ func (r *raft) becomeLeader() {
 		panic("invalid transition [follower -> leader]")
 	}
 	r.step = stepLeader
-	r.reset(r.Term)
+	r.reset(r.Term) // leader 需要获取每个 follower（ 和 learner ）的进度
 	r.tick = r.tickHeartbeat
 	r.lead = r.id
 	r.state = StateLeader
@@ -738,6 +738,8 @@ func (r *raft) becomeLeader() {
 	// could be expensive.
 	r.pendingConfIndex = r.raftLog.lastIndex()
 
+	// 以当前 term 提交一条空日志，以提交之前 term 的日志
+	// see 5.4.2 Committing entries from previous terms
 	emptyEnt := pb.Entry{Data: nil}
 	if !r.appendEntry(emptyEnt) {
 		// This won't happen because we just called reset() above.
@@ -745,8 +747,8 @@ func (r *raft) becomeLeader() {
 	}
 	// As a special case, don't count the initial empty entry towards the
 	// uncommitted log quota. This is because we want to preserve the
-	// behavior of allowing one entry larger than quota if the current
-	// usage is zero.
+	// behavior of allowing one entry larger than quota if the current usage is zero.
+	// 为了不将空日志条目的大小记在其中，调用 reduceUncommittedSize 方法
 	r.reduceUncommittedSize([]pb.Entry{emptyEnt})
 	r.logger.Infof("%x became leader at term %d", r.id, r.Term)
 }
@@ -985,7 +987,7 @@ type stepFunc func(r *raft, m pb.Message) error
 func stepLeader(r *raft, m pb.Message) error {
 	// These message types do not require any progress for m.From.
 	switch m.Type {
-	case pb.MsgBeat:
+	case pb.MsgBeat: // tickHeartbeat 产生一条 MsgBeat 消息
 		r.bcastHeartbeat()
 		return nil
 	case pb.MsgCheckQuorum:
@@ -1010,11 +1012,11 @@ func stepLeader(r *raft, m pb.Message) error {
 			}
 		})
 		return nil
-	case pb.MsgProp:
+	case pb.MsgProp: // leader 处理 MsgProp 消息
 		if len(m.Entries) == 0 { // 不允许 propose 空消息
 			r.logger.Panicf("%x stepped empty MsgProp", r.id)
 		}
-		if r.prs.Progress[r.id] == nil { // 节点不在集群里了，有可能是在配置变更的场景
+		if r.prs.Progress[r.id] == nil { // 检查自己是否被移出了集群
 			// If we are not currently a member of the range (i.e. this node
 			// was removed from the configuration while serving as leader),
 			// drop any new proposals.
@@ -1025,7 +1027,7 @@ func stepLeader(r *raft, m pb.Message) error {
 			return ErrProposalDropped
 		}
 
-		for i := range m.Entries { // 处理 conf 变更 propose
+		for i := range m.Entries { // 如果提议中包含 ConfChange 消息，会做特殊处理
 			e := &m.Entries[i]
 			var cc pb.ConfChangeI
 			if e.Type == pb.EntryConfChange {
@@ -1064,10 +1066,10 @@ func stepLeader(r *raft, m pb.Message) error {
 			}
 		}
 
-		if !r.appendEntry(m.Entries...) {
+		if !r.appendEntry(m.Entries...) { // 添加到本地 unstable 中
 			return ErrProposalDropped
 		}
-		r.bcastAppend() // 向集群其他节点广播 append 消息
+		r.bcastAppend() // 向所有 follower 广播 append 消息
 		return nil
 	case pb.MsgReadIndex:
 		// only one voting member (the leader) in the cluster
@@ -1098,10 +1100,10 @@ func stepLeader(r *raft, m pb.Message) error {
 		return nil
 	}
 	switch m.Type {
-	case pb.MsgAppResp: // 对 append 消息的应答
+	case pb.MsgAppResp: // 处理来自 follower 对 append 消息的应答
 		pr.RecentActive = true // peer 是活跃状态的
 
-		if m.Reject { // 如果拒绝了append消息，说明term、index不匹配
+		if m.Reject { // 如果拒绝了 append 消息，说明 term、index不匹配
 			// RejectHint is the suggested next base entry for appending (i.e.
 			// we try to append entry RejectHint+1 next), and LogTerm is the
 			// term that the follower has at index RejectHint. Older versions
@@ -1222,16 +1224,16 @@ func stepLeader(r *raft, m pb.Message) error {
 				//    log.
 				nextProbeIdx = r.raftLog.findConflictByTerm(m.RejectHint, m.LogTerm)
 			}
-			if pr.MaybeDecrTo(m.Index, nextProbeIdx) { // 尝试回退关于该节点的Match、Next索引
+			if pr.MaybeDecrTo(m.Index, nextProbeIdx) { // 尝试回退关于该节点的 Match、Next 索引
 				r.logger.Debugf("%x decreased progress of %x to [%s]", r.id, m.From, pr)
 				if pr.State == tracker.StateReplicate {
 					pr.BecomeProbe()
 				}
-				r.sendAppend(m.From) // 再次发送append消息
+				r.sendAppend(m.From) // 再次发送 append 消息
 			}
 		} else {
 			oldPaused := pr.IsPaused()
-			// 这个 index 是对端 raftLog.committed，即对端 commit 进度
+			// 这个 index 是 follower raftLog.committed，即 follower commit 进度，
 			// 根据这个信息更新这个节点的 Progress 进度
 			if pr.MaybeUpdate(m.Index) {
 				switch {
@@ -1269,7 +1271,7 @@ func stepLeader(r *raft, m pb.Message) error {
 				// replicate, or when freeTo() covers multiple messages). If
 				// we have more entries to send, send as many messages as we
 				// can (without sending empty messages for the commit index)
-				for r.maybeSendAppend(m.From, false) {
+				for r.maybeSendAppend(m.From, false) { // 尽可能多地为 follower 复制日志
 				}
 				// Transfer leadership is in progress.
 				if m.From == r.leadTransferee && pr.Match == r.raftLog.lastIndex() {
@@ -1284,9 +1286,10 @@ func stepLeader(r *raft, m pb.Message) error {
 
 		// free one slot for the full inflights window to allow progress.
 		if pr.State == tracker.StateReplicate && pr.Inflights.Full() {
+			// 保证在每个心跳周期处于 StateReplicate 状态的 follower 都至少能收到一条 MsgApp 消息
 			pr.Inflights.FreeFirstOne()
 		}
-		if pr.Match < r.raftLog.lastIndex() {
+		if pr.Match < r.raftLog.lastIndex() { // 复制新日志
 			r.sendAppend(m.From)
 		}
 
@@ -1304,7 +1307,7 @@ func stepLeader(r *raft, m pb.Message) error {
 				r.send(resp)
 			}
 		}
-	case pb.MsgSnapStatus:
+	case pb.MsgSnapStatus: // 只有 leader 需要处理 MsgSnapStatus 消息
 		if pr.State != tracker.StateSnapshot {
 			return nil
 		}
@@ -1381,7 +1384,7 @@ func stepCandidate(r *raft, m pb.Message) error {
 		myVoteRespType = pb.MsgVoteResp
 	}
 	switch m.Type {
-	case pb.MsgProp:
+	case pb.MsgProp: // candidate 丢弃 MsgProp 消息
 		r.logger.Infof("%x no leader at term %d; dropping proposal", r.id, r.Term)
 		return ErrProposalDropped
 	case pb.MsgApp:
@@ -1417,7 +1420,7 @@ func stepCandidate(r *raft, m pb.Message) error {
 
 func stepFollower(r *raft, m pb.Message) error {
 	switch m.Type {
-	case pb.MsgProp:
+	case pb.MsgProp: // follower 丢弃 MsgProp 消息
 		if r.lead == None {
 			r.logger.Infof("%x no leader at term %d; dropping proposal", r.id, r.Term)
 			return ErrProposalDropped
@@ -1470,7 +1473,7 @@ func stepFollower(r *raft, m pb.Message) error {
 }
 
 func (r *raft) handleAppendEntries(m pb.Message) {
-	if m.Index < r.raftLog.committed {
+	if m.Index < r.raftLog.committed { // 这是一条过期的消息
 		r.send(pb.Message{To: m.From, Type: pb.MsgAppResp, Index: r.raftLog.committed})
 		return
 	}
@@ -1508,7 +1511,7 @@ func (r *raft) handleAppendEntries(m pb.Message) {
 }
 
 func (r *raft) handleHeartbeat(m pb.Message) {
-	r.raftLog.commitTo(m.Commit)
+	r.raftLog.commitTo(m.Commit) // 更新 commit，避免空闲集群没有新提议无法更新 follower 的 committed 状态的问题
 	r.send(pb.Message{To: m.From, Type: pb.MsgHeartbeatResp, Context: m.Context})
 }
 

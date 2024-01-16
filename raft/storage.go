@@ -38,13 +38,15 @@ var ErrUnavailable = errors.New("requested entry at index is unavailable")
 var ErrSnapshotTemporarilyUnavailable = errors.New("snapshot is temporarily unavailable")
 
 // etcd 中的 raft 实现并不负责数据的持久化，
-// 所以它希望上面的应用层能实现这个接口，以便提供给它查询 log 的能力
+// 所以它希望上面的应用层能实现这个接口，并提供给它查询的能力
 // Storage is an interface that may be implemented by the application
 // to retrieve log entries from storage.
 //
 // If any Storage method returns an error, the raft instance will
 // become inoperable and refuse to participate in elections; the
 // application is responsible for cleanup and recovery in this case.
+
+// 主要注意的是，Storage 接口只定义了读取稳定存储中的日志、快照、状态的方法，而不关心写入稳定存储的方法
 type Storage interface {
 	// TODO(tbg): split this into two interfaces, LogStorage and StateStorage.
 
@@ -73,6 +75,10 @@ type Storage interface {
 	Snapshot() (pb.Snapshot, error)
 }
 
+// etcd 使用了基于内存的 MemoryStorage，是因为 etcd 在写入 MemoryStorage 前，需要先写入 WAL 或快照，
+// 而  WAL 或快照是保存在稳定存储中的。这样，在每次重启时，etcd 可以基于保存在稳定存储中的快照和 WAL 恢复 MemoryStorage 的状态。
+// 也就是说，etcd 的稳定存储是通过快照、WAL、MemoryStorage 三者共同实现的。
+
 // MemoryStorage implements the Storage interface backed by an in-memory array.
 // MemoryStorage 实现了由内存数组支持的 Storage 接口
 type MemoryStorage struct {
@@ -85,7 +91,7 @@ type MemoryStorage struct {
 	hardState pb.HardState
 	snapshot  pb.Snapshot
 	// ents[i] has raft log position i+snapshot.Metadata.Index
-	ents []pb.Entry
+	ents []pb.Entry // ents[0] is the dummy entry, 保存了 snapshot 的最后一条日志对应的 term 和 index
 }
 
 // NewMemoryStorage creates an empty MemoryStorage.
@@ -135,9 +141,9 @@ func (ms *MemoryStorage) Term(i uint64) (uint64, error) {
 	defer ms.Unlock()
 	offset := ms.ents[0].Index
 	if i < offset {
-		return 0, ErrCompacted
+		return 0, ErrCompacted // 已经被压缩到了 snapshot
 	}
-	if int(i-offset) >= len(ms.ents) {
+	if int(i-offset) >= len(ms.ents) { // 超过了 ents 长度，是一个不合理的 index
 		return 0, ErrUnavailable
 	}
 	return ms.ents[i-offset].Term, nil
@@ -181,7 +187,7 @@ func (ms *MemoryStorage) ApplySnapshot(snap pb.Snapshot) error {
 	//handle check for old snapshot being applied
 	msIndex := ms.snapshot.Metadata.Index
 	snapIndex := snap.Metadata.Index
-	if msIndex >= snapIndex {
+	if msIndex >= snapIndex { // 过期 snapshot
 		return ErrSnapOutOfDate
 	}
 
@@ -218,7 +224,7 @@ func (ms *MemoryStorage) CreateSnapshot(i uint64, cs *pb.ConfState, data []byte)
 // Compact discards all log entries prior to compactIndex.
 // It is the application's responsibility to not attempt to compact an index
 // greater than raftLog.applied.
-func (ms *MemoryStorage) Compact(compactIndex uint64) error {
+func (ms *MemoryStorage) Compact(compactIndex uint64) error { // 压缩 entry 到指定的 index
 	ms.Lock()
 	defer ms.Unlock()
 	offset := ms.ents[0].Index
@@ -257,18 +263,18 @@ func (ms *MemoryStorage) Append(entries []pb.Entry) error {
 		return nil
 	}
 	// truncate compacted entries
-	if first > entries[0].Index {
+	if first > entries[0].Index { // 把已经压缩过的 entries 过滤掉
 		entries = entries[first-entries[0].Index:]
 	}
 
 	offset := entries[0].Index - ms.ents[0].Index
 	switch {
-	case uint64(len(ms.ents)) > offset:
+	case uint64(len(ms.ents)) > offset: // ms.ents 与传入的 entries 有重叠
 		ms.ents = append([]pb.Entry{}, ms.ents[:offset]...)
 		ms.ents = append(ms.ents, entries...)
-	case uint64(len(ms.ents)) == offset:
+	case uint64(len(ms.ents)) == offset: // 无重叠
 		ms.ents = append(ms.ents, entries...)
-	default:
+	default: // 有数据丢失，直接 panic
 		getLogger().Panicf("missing log entry [last: %d, append at: %d]",
 			ms.lastIndex(), entries[0].Index)
 	}

@@ -90,17 +90,20 @@ func (l *raftLog) String() string {
 
 // maybeAppend returns (0, false) if the entries cannot be appended. Otherwise,
 // it returns (last index of new entries, true).
+// 尝试追加新日志，并更新 committed 索引。
+// 会检查是否有冲突并找到冲突位置，并试图通过覆盖本地日志的方式解决冲突
 func (l *raftLog) maybeAppend(index, logTerm, committed uint64, ents ...pb.Entry) (lastnewi uint64, ok bool) {
 	if l.matchTerm(index, logTerm) {
 		lastnewi = index + uint64(len(ents))
+		// 寻找待追加的日志与已有日志的第一个冲突条目的 index 或第一条新日志的 index
 		ci := l.findConflict(ents)
 		switch {
-		case ci == 0:
+		case ci == 0: // 没有需要添加的 entry
 		case ci <= l.committed:
 			l.logger.Panicf("entry %d conflict with committed entry [committed(%d)]", ci, l.committed)
 		default:
 			offset := index + 1
-			l.append(ents[ci-offset:]...)
+			l.append(ents[ci-offset:]...) // 从冲突处或新日志处开始的日志覆盖或追加到当前日志中
 		}
 		l.commitTo(min(committed, lastnewi))
 		return lastnewi, true
@@ -108,6 +111,8 @@ func (l *raftLog) maybeAppend(index, logTerm, committed uint64, ents ...pb.Entry
 	return 0, false
 }
 
+// 不会检查给定的日志切片是否与已有日志有冲突，
+// 因此，leader 向 raftLog 中追加日志时会调用该函数
 func (l *raftLog) append(ents ...pb.Entry) uint64 {
 	if len(ents) == 0 {
 		return l.lastIndex()
@@ -122,10 +127,15 @@ func (l *raftLog) append(ents ...pb.Entry) uint64 {
 // findConflict finds the index of the conflict.
 // It returns the first pair of conflicting entries between the existing
 // entries and the given entries, if there are any.
+//
 // If there is no conflicting entries, and the existing entries contains
 // all the given entries, zero will be returned.
+// 如果没有冲突的 entries，且存在的 entries 包含了所有给定的 entry，则返回 0.
+//
 // If there is no conflicting entries, but the given entries contains new
 // entries, the index of the first new entry will be returned.
+// 如果没有冲突的 entries，并且给定的 entry 中存在新的 entry，则返回第一个新 entry 的 index
+//
 // An entry is considered to be conflicting if it has the same index but
 // a different term.
 // The index of the given entries MUST be continuously increasing.
@@ -182,6 +192,7 @@ func (l *raftLog) unstableEntries() []pb.Entry {
 // nextEnts returns all the available entries for execution.
 // If applied is smaller than the index of snapshot, it returns all committed
 // entries after the index of snapshot.
+// 返回可被应用到状态机的日志条目（ 已提交但还未应用 ）
 func (l *raftLog) nextEnts() (ents []pb.Entry) {
 	// 如果 l.applied+1 <= l.firstIndex()，
 	// 那么这个范围内的日志条目可能已经被删除或覆盖了，
@@ -199,6 +210,8 @@ func (l *raftLog) nextEnts() (ents []pb.Entry) {
 
 // hasNextEnts returns if there is any available entries for execution. This
 // is a fast check without heavy raftLog.slice() in raftLog.nextEnts().
+// 返回是否存在可被应用到状态机的日志条目。
+// 该方法不会调用 slice方法，性能更高。
 func (l *raftLog) hasNextEnts() bool {
 	off := max(l.applied+1, l.firstIndex())
 	return l.committed+1 > off
@@ -238,6 +251,7 @@ func (l *raftLog) lastIndex() uint64 {
 	return i
 }
 
+// 更新 committed 索引
 func (l *raftLog) commitTo(tocommit uint64) {
 	// never decrease commit
 	if l.committed < tocommit {
@@ -248,6 +262,7 @@ func (l *raftLog) commitTo(tocommit uint64) {
 	}
 }
 
+// 更新 applied 索引
 func (l *raftLog) appliedTo(i uint64) {
 	if i == 0 {
 		return
@@ -294,6 +309,7 @@ func (l *raftLog) term(i uint64) (uint64, error) {
 	panic(err) // TODO(bdarnell)
 }
 
+// 获取 index 从 i 开始的最多 maxsize 条日志
 func (l *raftLog) entries(i, maxsize uint64) ([]pb.Entry, error) {
 	if i > l.lastIndex() {
 		return nil, nil
@@ -324,6 +340,7 @@ func (l *raftLog) isUpToDate(lasti, term uint64) bool {
 	return term > l.lastTerm() || (term == l.lastTerm() && lasti >= l.lastIndex())
 }
 
+// 判断给定的 index 与 term 是否与日志中相应 index 的条目的 term 匹配
 func (l *raftLog) matchTerm(i, term uint64) bool {
 	t, err := l.term(i)
 	if err != nil {
@@ -340,6 +357,7 @@ func (l *raftLog) maybeCommit(maxIndex, term uint64) bool {
 	return false
 }
 
+// 将给定快照应用到（ unstable ）日志中
 func (l *raftLog) restore(s pb.Snapshot) {
 	l.logger.Infof("log [%s] starts to restore snapshot [index: %d, term: %d]", l, s.Metadata.Index, s.Metadata.Term)
 	l.committed = s.Metadata.Index

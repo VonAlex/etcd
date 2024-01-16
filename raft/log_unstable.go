@@ -20,7 +20,7 @@ import pb "go.etcd.io/etcd/raft/v3/raftpb"
 // Note that unstable.offset may be less than the highest log
 // position in storage; this means that the next write to storage
 // might need to truncate the log before persisting unstable.entries.
-type unstable struct { // 没有被用户层持久化的数据
+type unstable struct { // 还未被保存到稳定存储中的快照或日志条目
 	// the incoming unstable snapshot, if any.
 	// 快照数据仅当当前节点在接收从leader发送过来的快照数据时存在，
 	// 在接收快照数据的时候，entries数组中是没有数据的
@@ -29,8 +29,10 @@ type unstable struct { // 没有被用户层持久化的数据
 	// all entries that have not yet been written to storage.
 	entries []pb.Entry
 
-	// 第一个 unstable entry 的索引，不能直接用 entries[0].Index，
-	// 因为 entries 有可能为空，如刚启动，日志持久化完成时等时刻
+	// unstable 的日志起点，即第一个 unstable entry 的索引，不能直接用 entries[0].Index，
+	// 因为 entries 有可能为空，如刚启动，日志持久化完成时等时刻。
+	// 该起点可能比 Storage 中 index 最大的日志条目旧，
+	// 也就是说 Storage和 unstable 中的日志可能有部分重叠，因此在处理二者之间的日志时，有一些裁剪日志的操作。
 	offset uint64
 
 	logger Logger
@@ -38,6 +40,7 @@ type unstable struct { // 没有被用户层持久化的数据
 
 // maybeFirstIndex returns the index of the first possible entry in entries
 // if it has a snapshot.
+// 只有 unstable 中包含快照时，unstable 才可能得知整个 raftLog 的 first index 的位置
 func (u *unstable) maybeFirstIndex() (uint64, bool) {
 	if u.snapshot != nil {
 		return u.snapshot.Metadata.Index + 1, true
@@ -45,9 +48,8 @@ func (u *unstable) maybeFirstIndex() (uint64, bool) {
 	return 0, false
 }
 
-// maybeLastIndex returns the last index if it has at least one
-// unstable entry or snapshot.
-// 获取最后一条日志的索引
+// maybeLastIndex returns the last index if it has at least one unstable entry or snapshot.
+// 只有当 unstable 中既没有日志也没有快照时，unstable 才无法得知 last index 的位置
 func (u *unstable) maybeLastIndex() (uint64, bool) {
 	if l := len(u.entries); l != 0 {
 		return u.offset + uint64(l) - 1, true
@@ -105,7 +107,7 @@ func (u *unstable) shrinkEntriesArray() {
 	const lenMultiple = 2
 	if len(u.entries) == 0 {
 		u.entries = nil
-	} else if len(u.entries)*lenMultiple < cap(u.entries) {
+	} else if len(u.entries)*lenMultiple < cap(u.entries) { // 利用率不到 50%
 		newEntries := make([]pb.Entry, len(u.entries))
 		copy(newEntries, u.entries)
 		u.entries = newEntries
@@ -124,24 +126,24 @@ func (u *unstable) restore(s pb.Snapshot) {
 	u.snapshot = &s
 }
 
+// 当 raftLog 需要将新日志保存到 unstable 中时会调用该方法
 func (u *unstable) truncateAndAppend(ents []pb.Entry) {
 	after := ents[0].Index
 	switch {
-	case after == u.offset+uint64(len(u.entries)):
-		// after is the next index in the u.entries
-		// directly append
+	case after == u.offset+uint64(len(u.entries)): // after 恰好是 unstable 下一条日志
+		// after is the next index in the u.entries directly append
 		u.entries = append(u.entries, ents...)
-	case after <= u.offset:
+	case after <= u.offset: // after 比 unstable 的第一条日志还早
 		u.logger.Infof("replace the unstable entries from index %d", after)
 		// The log is being truncated to before our current offset
 		// portion, so set the offset and replace the entries
 		u.offset = after
 		u.entries = ents
-	default: // 有重叠的日志
+	default: // after 在 offset之 后，但与 unstable 中部分日志重叠
 		// truncate to after and copy to u.entries
 		// then append
 		u.logger.Infof("truncate the unstable entries before index %d", after)
-		u.entries = append([]pb.Entry{}, u.slice(u.offset, after)...)
+		u.entries = append([]pb.Entry{}, u.slice(u.offset, after)...) // 剪裁重叠部分
 		u.entries = append(u.entries, ents...)
 	}
 }

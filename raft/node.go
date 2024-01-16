@@ -127,8 +127,8 @@ func (rd Ready) appliedCursor() uint64 {
 	return 0
 }
 
+// 使用 etcd/raft 的开发者不能直接操作 raft 结构体，只能通过 etcd/raft 提供的 Node 接口对其进行操作。
 // Node represents a node in a raft cluster.
-// raft cluster 的一个节点
 type Node interface {
 	// Tick increments the internal logical clock for the Node by a single tick.
 	// Election timeouts and heartbeat timeouts are in units of ticks.
@@ -163,7 +163,7 @@ type Node interface {
 	// Ready returns a channel that returns the current point-in-time state.
 	// Users of the Node must call Advance after retrieving the state returned by Ready.
 	// Ready 返回一个 channel，用于返回当前的状态。
-	// 在使用 Ready 获取状态后，必须先调用 Advance 函数。
+	// 在使用 Ready 获取状态后，必须调用 Advance 函数（ 通知 raft 这批数据已经处理完成，可以继续传入下一批 ）
 	//
 	// NOTE: No committed entries from the next Ready may be applied until all committed entries
 	// and snapshots from the previous one have finished.

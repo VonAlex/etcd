@@ -30,7 +30,7 @@ import (
 // NB(tbg): Progress is basically a state machine whose transitions are mostly
 // strewn around `*raft.raft`. Additionally, some fields are only used when in a
 // certain State. All of this isn't ideal.
-// Progress 基本上是一个围绕 *raft.raft 做状态转换的状态机。另外，其中部分成员只在特定状态下使用。
+// Progress 基本上是一个围绕 raft.raft 做状态转换的状态机。另外，其中部分成员只在特定状态下使用。
 type Progress struct {
 	// Match 已复制给该 follower 的日志的最高索引值
 	// Next 保存下一次 leader 发送 append 消息给该 follower 的日志索引，即下一次复制日志时，leader 会从 Next 开始发送日志。
@@ -73,7 +73,7 @@ type Progress struct {
 	// RecentActive can be reset to false after an election timeout.
 	//
 	// TODO(tbg): the leader should always have this set to true.
-	// 如果该 Progress 近处于活跃状态，则为 true。在选举超时后，重置为 false。
+	// 如果该 follower 处于活跃状态，则为 true。在选举超时后，重置为 false。
 	RecentActive bool
 
 	// ProbeSent is used while this follower is in StateProbe. When ProbeSent is
@@ -106,6 +106,7 @@ type Progress struct {
 	// When a leader receives a reply, the previous inflights should
 	// be freed by calling inflights.FreeLE with the index of the last received entry.
 	// 当 leader 收到一条回复，之前的 inflights 中相应的 entry 应该通过调用 inflights.FreeLE 释放。
+	// Inflights 实现了 MaxInflightMsgs 字段配置的流控。
 	Inflights *Inflights
 
 	// IsLearner is true if this progress is tracked for a learner.
@@ -150,7 +151,7 @@ func (pr *Progress) BecomeProbe() {
 	// If the original state is StateSnapshot, progress knows that
 	// the pending snapshot has been sent to this peer successfully, then
 	// probes from pendingSnapshot + 1.
-	if pr.State == StateSnapshot {
+	if pr.State == StateSnapshot { // leader 得知 follower 成功应用了快照后，需要调用 Node 的 ReportSnapshot 方法
 		pendingSnapshot := pr.PendingSnapshot
 		pr.ResetState(StateProbe)
 		pr.Next = max(pr.Match+1, pendingSnapshot+1)
@@ -226,6 +227,8 @@ func (pr *Progress) MaybeDecrTo(rejected, matchHint uint64) bool {
 
 	// The rejection must be stale if "rejected" does not match next - 1. This
 	// is because non-replicating followers are probed one entry at a time.
+	// 其它状态下至多只会为该 follower 发送一条日志复制请求，
+	// 因此，只要 rejected 不等于 Next-1，该消息就是过期的。
 	if pr.Next-1 != rejected {
 		return false
 	}
