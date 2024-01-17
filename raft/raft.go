@@ -767,6 +767,7 @@ func (r *raft) hup(t CampaignType) {
 	if err != nil {
 		r.logger.Panicf("unexpected error getting unapplied entries (%v)", err)
 	}
+	// 如果有未处理的 conf 变更请求，不可以处理 MsgHup 消息
 	if n := numOfPendingConf(ents); n != 0 && r.raftLog.committed > r.raftLog.applied {
 		r.logger.Warningf("%x cannot campaign at term %d since there are still %d pending configuration changes to apply", r.id, r.Term, n)
 		return
@@ -786,23 +787,23 @@ func (r *raft) campaign(t CampaignType) {
 	}
 	var term uint64
 	var voteMsg pb.MessageType
-	if t == campaignPreElection {
-		r.becomePreCandidate()
+	if t == campaignPreElection { // Pre-Vote
+		r.becomePreCandidate() // 不增加 term
 		voteMsg = pb.MsgPreVote
 		// PreVote RPCs are sent for the next term before we've incremented r.Term.
 		term = r.Term + 1
 	} else {
-		r.becomeCandidate()
+		r.becomeCandidate() // 增加 term
 		voteMsg = pb.MsgVote
 		term = r.Term
 	}
 	if _, _, res := r.poll(r.id, voteRespMsgType(voteMsg), true); res == quorum.VoteWon {
 		// We won the election after voting for ourselves (which must mean that
 		// this is a single-node cluster). Advance to the next state.
-		if t == campaignPreElection {
+		if t == campaignPreElection { // 赢得了投票后，预投票阶段进入投票阶段
 			r.campaign(campaignElection)
 		} else {
-			r.becomeLeader()
+			r.becomeLeader() // 成为 leader
 		}
 		return
 	}
@@ -824,7 +825,7 @@ func (r *raft) campaign(t CampaignType) {
 
 		var ctx []byte
 		if t == campaignTransfer {
-			ctx = []byte(t)
+			ctx = []byte(t) // CampaignTransfer 写入 ctx
 		}
 		r.send(pb.Message{Term: term, To: id, Type: voteMsg, Index: r.raftLog.lastIndex(), LogTerm: r.raftLog.lastTerm(), Context: ctx})
 	}
@@ -836,18 +837,21 @@ func (r *raft) poll(id uint64, t pb.MessageType, v bool) (granted int, rejected 
 	} else {
 		r.logger.Infof("%x received %s rejection from %x at term %d", r.id, t, id, r.Term)
 	}
-	r.prs.RecordVote(id, v)
+	r.prs.RecordVote(id, v) // 给自己投票
 	return r.prs.TallyVotes()
 }
 
+// Raft 状态机状态转移的入口
 func (r *raft) Step(m pb.Message) error {
 	// Handle the message term, which may result in our stepping down to a follower.
 	switch {
-	case m.Term == 0:
+	case m.Term == 0: // term 为 0 的消息作为本地消息
 		// local message
-	case m.Term > r.Term:
+	case m.Term > r.Term: // 收到 Term 大于当前节点的 Term 的消息
 		if m.Type == pb.MsgVote || m.Type == pb.MsgPreVote {
 			force := bytes.Equal(m.Context, []byte(campaignTransfer))
+			// 开启了 Check Quorum，且 election 未超时
+			// inLease 为真，表示当前 Leader Lease 还没有过期
 			inLease := r.checkQuorum && r.lead != None && r.electionElapsed < r.electionTimeout
 			if !force && inLease {
 				// If a server receives a RequestVote request within the minimum election timeout
@@ -870,35 +874,53 @@ func (r *raft) Step(m pb.Message) error {
 			r.logger.Infof("%x [term: %d] received a %s message with higher term from %x [term: %d]",
 				r.id, r.Term, m.Type, m.From, m.Term)
 			if m.Type == pb.MsgApp || m.Type == pb.MsgHeartbeat || m.Type == pb.MsgSnap {
-				r.becomeFollower(m.Term, m.From)
+				r.becomeFollower(m.Term, m.From) // leader 发来的消息
 			} else {
-				r.becomeFollower(m.Term, None)
+				// pre-vote 不需要转为 follower
+				r.becomeFollower(m.Term, None) // 暂时不知道当前的 leader 节点是谁
 			}
 		}
 
 	case m.Term < r.Term:
 		if (r.checkQuorum || r.preVote) && (m.Type == pb.MsgHeartbeat || m.Type == pb.MsgApp) {
-			// We have received messages from a leader at a lower term. It is possible
-			// that these messages were simply delayed in the network, but this could
-			// also mean that this node has advanced its term number during a network
-			// partition, and it is now unable to either win an election or to rejoin
-			// the majority on the old term. If checkQuorum is false, this will be
-			// handled by incrementing term numbers in response to MsgVote with a
-			// higher term, but if checkQuorum is true we may not advance the term on
-			// MsgVote and must generate other messages to advance the term. The net
-			// result of these two features is to minimize the disruption caused by
+			// We have received messages from a leader at a lower term.
+			// 收到了一个拥有更低 term 的 leader 的心跳/append 消息。
+
+			// It is possible that these messages were simply delayed in the network,
+			// 有可能这些消息只是在网络中出现了延迟，
+			// but this could also mean that this node has advanced its term number during a network partition,
+			// 但这也可能意味着本节点在网络分区期间增加了自己的 term 值，
+			// and it is now unable to either win an election or to rejoin the majority on the old term.
+			// 则它既不能赢得选举，也不能加入旧的 term 值的集群大多数。
+
+			// If checkQuorum is false,
+			// 如果没有开启 checkQuorum，
+			// this will be handled by incrementing term numbers in response to MsgVote with a higher term,
+			// 这将通过在收到带有更高 term 的 MsgVote 时递增 term 值来处理。
+			// but if checkQuorum is true we may not advance the term on MsgVote and must generate other messages to advance the term.
+			// 但是，如果开启了 checkQuorum，我们可能不会在收到 MsgVote 时提升 term，必须生成其他消息来提升 term。
+			//
+			// The net result of these two features is to minimize the disruption caused by
 			// nodes that have been removed from the cluster's configuration: a
 			// removed node will send MsgVotes (or MsgPreVotes) which will be ignored,
 			// but it will not receive MsgApp or MsgHeartbeat, so it will not create
 			// disruptive term increases, by notifying leader of this node's activeness.
 			// The above comments also true for Pre-Vote
+			// 这两个特性的最终结果是最小化从集群配置中删除的节点而引起的干扰：
+			// 被移除的节点将发送 MsgVotes（或 MsgPreVotes），这些消息将被忽略，但它不会接收到 MsgApp 或 MsgHeartbeat，
+			// 因此它不会通过通知 leader 此节点的活跃性而创建干扰性的 term 增加。
 			//
-			// When follower gets isolated, it soon starts an election ending
-			// up with a higher term than leader, although it won't receive enough
-			// votes to win the election. When it regains connectivity, this response
-			// with "pb.MsgAppResp" of higher term would force leader to step down.
-			// However, this disruption is inevitable to free this stuck node with
-			// fresh election. This can be prevented with Pre-Vote phase.
+			// When follower gets isolated, it soon starts an election ending up with a higher term than leader,
+			// although it won't receive enough votes to win the election.
+			// 当 follower 被隔离，虽然它不会获得足够的投票而赢得选举，但它最终会以更高的 term 结束选举
+
+			// When it regains connectivity,
+			// this response with "pb.MsgAppResp" of higher term would force leader to step down.
+			// 当恢复连接时，具有更高 term 的 pb.MsgAppResp 响应将迫使 leader 下台。
+			// However, this disruption is inevitable to free this stuck node with fresh election.
+			// 然而，为了解救这个被卡住的节点，这种干扰是不可避免的，需要进行新的选举。
+			// This can be prevented with Pre-Vote phase.
+			// 这可以通过 Pre-Vote 阶段来防止。
 			r.send(pb.Message{To: m.From, Type: pb.MsgAppResp})
 		} else if m.Type == pb.MsgPreVote {
 			// Before Pre-Vote enable, there may have candidate with higher term,
@@ -984,13 +1006,14 @@ func (r *raft) Step(m pb.Message) error {
 
 type stepFunc func(r *raft, m pb.Message) error
 
+// stepXXX 定义了 raft 状态机的相应角色下状态转移的行为
 func stepLeader(r *raft, m pb.Message) error {
 	// These message types do not require any progress for m.From.
 	switch m.Type {
-	case pb.MsgBeat: // tickHeartbeat 产生一条 MsgBeat 消息
+	case pb.MsgBeat: // 每次 tickHeartbeat 产生一条 MsgBeat 消息
 		r.bcastHeartbeat()
 		return nil
-	case pb.MsgCheckQuorum:
+	case pb.MsgCheckQuorum: // 开启 Check Quorum 时，election timeout 超时后通知 leader 进行相关操作的消息
 		// The leader should always see itself as active. As a precaution, handle
 		// the case in which the leader isn't in the configuration any more (for
 		// example if it just removed itself).
@@ -1000,7 +1023,7 @@ func stepLeader(r *raft, m pb.Message) error {
 		if pr := r.prs.Progress[r.id]; pr != nil {
 			pr.RecentActive = true
 		}
-		if !r.prs.QuorumActive() {
+		if !r.prs.QuorumActive() { //检查活跃节点数未到达 quorum，则从 leader 变为 follower
 			r.logger.Warningf("%x stepped down to follower since quorum is not active", r.id)
 			r.becomeFollower(r.Term, None)
 		}
@@ -1337,22 +1360,23 @@ func stepLeader(r *raft, m pb.Message) error {
 		}
 		r.logger.Debugf("%x failed to send message to %x because it is unreachable [%s]", r.id, m.From, pr)
 	case pb.MsgTransferLeader:
-		if pr.IsLearner {
+		if pr.IsLearner { // 忽略来自 learner 的 MsgTransferLeader 消息
 			r.logger.Debugf("%x is learner. Ignored transferring leadership", r.id)
 			return nil
 		}
 		leadTransferee := m.From
 		lastLeadTransferee := r.leadTransferee
 		if lastLeadTransferee != None {
-			if lastLeadTransferee == leadTransferee {
+			if lastLeadTransferee == leadTransferee { // 正在转移，在目标相同，那么不做处理
 				r.logger.Infof("%x [term %d] transfer leadership to %x is in progress, ignores request to same node %x",
 					r.id, r.Term, leadTransferee, leadTransferee)
 				return nil
 			}
+			// 否则放弃正在进行的 Leader Transfer，而执行新的转移
 			r.abortLeaderTransfer()
 			r.logger.Infof("%x [term %d] abort previous transferring leadership to %x", r.id, r.Term, lastLeadTransferee)
 		}
-		if leadTransferee == r.id {
+		if leadTransferee == r.id { // 如果转移目标是当前节点，而当前节点已经是 leader了，那么不做处理
 			r.logger.Debugf("%x is already leader. Ignored transferring leadership to self", r.id)
 			return nil
 		}
@@ -1361,11 +1385,11 @@ func stepLeader(r *raft, m pb.Message) error {
 		// Transfer leadership should be finished in one electionTimeout, so reset r.electionElapsed.
 		r.electionElapsed = 0
 		r.leadTransferee = leadTransferee
-		if pr.Match == r.raftLog.lastIndex() {
-			r.sendTimeoutNow(leadTransferee)
+		if pr.Match == r.raftLog.lastIndex() { // 判断转移目标的日志是否跟上了 leader
+			r.sendTimeoutNow(leadTransferee) // 向其发送 MsgTimeoutNow 消息，让其立即超时并进行新的选举
 			r.logger.Infof("%x sends MsgTimeoutNow to %x immediately as %x already has up-to-date log", r.id, leadTransferee, leadTransferee)
 		} else {
-			r.sendAppend(leadTransferee)
+			r.sendAppend(leadTransferee) // 正常向其发送日志
 		}
 	}
 	return nil
@@ -1387,25 +1411,25 @@ func stepCandidate(r *raft, m pb.Message) error {
 	case pb.MsgProp: // candidate 丢弃 MsgProp 消息
 		r.logger.Infof("%x no leader at term %d; dropping proposal", r.id, r.Term)
 		return ErrProposalDropped
-	case pb.MsgApp:
+	case pb.MsgApp: // 转成 follower 状态
 		r.becomeFollower(m.Term, m.From) // always m.Term == r.Term
 		r.handleAppendEntries(m)
-	case pb.MsgHeartbeat:
+	case pb.MsgHeartbeat: // 收到来自 leader 的 MsgHeartbeat，转成 follower 状态
 		r.becomeFollower(m.Term, m.From) // always m.Term == r.Term
 		r.handleHeartbeat(m)
-	case pb.MsgSnap:
+	case pb.MsgSnap: // 转成 follower 状态
 		r.becomeFollower(m.Term, m.From) // always m.Term == r.Term
 		r.handleSnapshot(m)
-	case myVoteRespType:
+	case myVoteRespType: // 收到投票响应
 		gr, rj, res := r.poll(m.From, m.Type, !m.Reject)
 		r.logger.Infof("%x has received %d %s votes and %d vote rejections", r.id, gr, m.Type, rj)
 		switch res {
-		case quorum.VoteWon:
+		case quorum.VoteWon: // 赢得选举
 			if r.state == StatePreCandidate {
 				r.campaign(campaignElection)
 			} else {
 				r.becomeLeader()
-				r.bcastAppend()
+				r.bcastAppend() // 向集群广播 MsgAppend 消息以通知集群中节点已有 leader产生
 			}
 		case quorum.VoteLost:
 			// pb.MsgPreVoteResp contains future term of pre-candidate
@@ -1429,9 +1453,9 @@ func stepFollower(r *raft, m pb.Message) error {
 			return ErrProposalDropped
 		}
 		m.To = r.lead
-		r.send(m) // follower 收到 propose 会转发给 leader，只有 leader 能处理写请求
+		r.send(m) // 收到 propose 会转发给 leader ( 只有 leader 能处理写请求 )
 	case pb.MsgApp:
-		r.electionElapsed = 0
+		r.electionElapsed = 0 // reset election timeout
 		r.lead = m.From
 		r.handleAppendEntries(m)
 	case pb.MsgHeartbeat:
@@ -1615,7 +1639,10 @@ func (r *raft) restore(s pb.Snapshot) bool {
 
 // promotable indicates whether state machine can be promoted to leader,
 // which is true when its own id is in progress list.
-// 是否可以被提升为 leader
+// 该节点 在以下 3种情况下不可以被提升为 leader：
+// - 不在集群中
+// - learner
+// - 有未被保存到稳定存储中的快照
 func (r *raft) promotable() bool {
 	pr := r.prs.Progress[r.id]
 	return pr != nil && !pr.IsLearner && !r.raftLog.hasPendingSnapshot()
