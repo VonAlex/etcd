@@ -265,6 +265,7 @@ func (a *applierV3backend) Put(ctx context.Context, txn mvcc.TxnWrite, p *pb.Put
 				return nil, nil, lease.ErrLeaseNotFound
 			}
 		}
+		// kv is mvcc.watchableStore
 		txn = a.s.KV().Write(trace)
 		defer txn.End()
 	}
@@ -285,7 +286,7 @@ func (a *applierV3backend) Put(ctx context.Context, txn mvcc.TxnWrite, p *pb.Put
 			return nil, nil, ErrKeyNotFound
 		}
 	}
-	if p.IgnoreValue {
+	if p.IgnoreValue { // 忽略 value，则置空它
 		val = rr.KVs[0].Value
 	}
 	if p.IgnoreLease {

@@ -27,7 +27,8 @@ import (
 )
 
 type authApplierV3 struct {
-	applierV3
+	applierV3 // quotaApplierV3
+
 	as     auth.AuthStore
 	lessor lease.Lessor
 
@@ -52,13 +53,13 @@ func (aa *authApplierV3) Apply(r *pb.InternalRaftRequest, shouldApplyV3 membersh
 		aa.authInfo.Revision = r.Header.AuthRevision
 	}
 	if needAdminPermission(r) {
-		if err := aa.as.IsAdminPermitted(&aa.authInfo); err != nil {
+		if err := aa.as.IsAdminPermitted(&aa.authInfo); err != nil { // 无权限
 			aa.authInfo.Username = ""
 			aa.authInfo.Revision = 0
 			return &applyResult{err: err}
 		}
 	}
-	ret := aa.applierV3.Apply(r, shouldApplyV3)
+	ret := aa.applierV3.Apply(r, shouldApplyV3) // applierV3backend.Apply
 	aa.authInfo.Username = ""
 	aa.authInfo.Revision = 0
 	return ret

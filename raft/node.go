@@ -482,7 +482,7 @@ func (n *node) stepWait(ctx context.Context, m pb.Message) error {
 
 // Step advances the state machine using msgs. The ctx.Err() will be returned, if any.
 func (n *node) stepWithWaitOption(ctx context.Context, m pb.Message, wait bool) error {
-	if m.Type != pb.MsgProp { // 所有的非 pb.MsgProp 消息通过 recvc 送给 node 处理
+	if m.Type != pb.MsgProp { // 所有的非 MsgProp 消息通过 recvc 送给 node 处理
 		select {
 		case n.recvc <- m:
 			return nil

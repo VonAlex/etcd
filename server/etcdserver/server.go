@@ -250,7 +250,7 @@ type EtcdServer struct {
 	applyV2 ApplierV2
 
 	// applyV3 is the applier with auth and quotas
-	applyV3 applierV3
+	applyV3 applierV3 // authApplierV3
 	// applyV3Base is the core applier without auth or quotas
 	applyV3Base applierV3
 	// applyV3Internal is the applier for internal request
@@ -350,13 +350,13 @@ func NewServer(cfg config.ServerConfig) (srv *EtcdServer, err error) {
 		)
 	}
 
-	if terr := fileutil.TouchDirAll(cfg.Logger, cfg.DataDir); terr != nil {
+	if terr := fileutil.TouchDirAll(cfg.Logger, cfg.DataDir); terr != nil { // data 目录是否可写
 		return nil, fmt.Errorf("cannot access data directory: %v", terr)
 	}
 
-	haveWAL := wal.Exist(cfg.WALDir()) // 是否有 wal 文件
+	haveWAL := wal.Exist(cfg.WALDir()) // 是否有 wal 目录
 
-	if err = fileutil.TouchDirAll(cfg.Logger, cfg.SnapDir()); err != nil {
+	if err = fileutil.TouchDirAll(cfg.Logger, cfg.SnapDir()); err != nil { // snap 目录是否可写
 		cfg.Logger.Fatal(
 			"failed to create snapshot directory",
 			zap.String("path", cfg.SnapDir()),
@@ -364,7 +364,7 @@ func NewServer(cfg config.ServerConfig) (srv *EtcdServer, err error) {
 		)
 	}
 
-	if err = fileutil.RemoveMatchFile(cfg.Logger, cfg.SnapDir(), func(fileName string) bool {
+	if err = fileutil.RemoveMatchFile(cfg.Logger, cfg.SnapDir(), func(fileName string) bool { // 移除临时 snap
 		return strings.HasPrefix(fileName, "tmp")
 	}); err != nil {
 		cfg.Logger.Error(
@@ -377,13 +377,13 @@ func NewServer(cfg config.ServerConfig) (srv *EtcdServer, err error) {
 	ss := snap.New(cfg.Logger, cfg.SnapDir())
 
 	bepath := cfg.BackendPath()
-	beExist := fileutil.Exist(bepath)
+	beExist := fileutil.Exist(bepath) // db 目录
 
 	ci := cindex.NewConsistentIndex(nil)
 	beHooks := &backendHooks{lg: cfg.Logger, indexer: ci}
 	be := openBackend(cfg, beHooks)
 	ci.SetBackend(be)
-	cindex.CreateMetaBucket(be.BatchTx()) // 创建 meta bucket
+	cindex.CreateMetaBucket(be.BatchTx()) // 创建 boltdb meta bucket
 
 	if cfg.ExperimentalBootstrapDefragThresholdMegabytes != 0 {
 		err := maybeDefragBackend(cfg, be)
@@ -1200,7 +1200,7 @@ func (s *EtcdServer) applyAll(ep *etcdProgress, apply *apply) {
 	s.applySnapshot(ep, apply)
 	s.applyEntries(ep, apply)
 
-	proposalsApplied.Set(float64(ep.appliedi))
+	proposalsApplied.Set(float64(ep.appliedi)) // 更新监控 proposals_applied_total
 	s.applyWait.Trigger(ep.appliedi)
 
 	// wait for the raft routine to finish the disk writes before triggering a
@@ -1377,12 +1377,13 @@ func (s *EtcdServer) applyEntries(ep *etcdProgress, apply *apply) {
 	}
 	var ents []raftpb.Entry
 	if ep.appliedi+1-firsti < uint64(len(apply.entries)) {
-		ents = apply.entries[ep.appliedi+1-firsti:]
+		ents = apply.entries[ep.appliedi+1-firsti:] // 忽略重叠的 entry
 	}
 	if len(ents) == 0 {
 		return
 	}
 	var shouldstop bool
+	// 串行 apply entries
 	if ep.appliedt, ep.appliedi, shouldstop = s.apply(ents, &ep.confState); shouldstop {
 		go s.stopWithDelay(10*100*time.Millisecond, fmt.Errorf("the member has been permanently removed from the cluster"))
 	}
@@ -2222,7 +2223,7 @@ func (s *EtcdServer) applyEntryNormal(e *raftpb.Entry) {
 	}
 
 	var raftReq pb.InternalRaftRequest
-	if !pbutil.MaybeUnmarshal(&raftReq, e.Data) { // backward compatible
+	if !pbutil.MaybeUnmarshal(&raftReq, e.Data) { // backward compatible 版本后向兼容
 		var r pb.Request
 		rp := &r
 		pbutil.MustUnmarshal(rp, e.Data)
@@ -2279,7 +2280,7 @@ func (s *EtcdServer) applyEntryNormal(e *raftpb.Entry) {
 			Action:   pb.AlarmRequest_ACTIVATE,
 			Alarm:    pb.AlarmType_NOSPACE,
 		}
-		s.raftRequest(s.ctx, pb.InternalRaftRequest{Alarm: a})
+		s.raftRequest(s.ctx, pb.InternalRaftRequest{Alarm: a}) // AlarmType_NOSPACE 放入 raft
 		s.w.Trigger(id, ar)
 	})
 }

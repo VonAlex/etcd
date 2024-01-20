@@ -78,7 +78,7 @@ func openBackend(cfg config.ServerConfig, hooks backend.Hooks) backend.Backend {
 	}()
 
 	select {
-	case be := <-beOpened:
+	case be := <-beOpened: // 等到
 		cfg.Logger.Info("opened backend db", zap.String("path", fn), zap.Duration("took", time.Since(now)))
 		return be
 

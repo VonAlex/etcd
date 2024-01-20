@@ -59,12 +59,16 @@ func newFileEncoder(f *os.File, prevCrc uint32) (*encoder, error) {
 	return newEncoder(f, prevCrc, int(offset)), nil
 }
 
+// 写入一条 wal record：
+// - Type：StateType/EntryType
+// - Crc：校验值
+// - Data: WAL 内容
 func (e *encoder) encode(rec *walpb.Record) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
 	e.crc.Write(rec.Data)
-	rec.Crc = e.crc.Sum32() // 计算 crc
+	rec.Crc = e.crc.Sum32() // 填充 crc 字段
 	var (
 		data []byte
 		err  error
@@ -93,7 +97,7 @@ func (e *encoder) encode(rec *walpb.Record) error {
 	if padBytes != 0 {
 		data = append(data, make([]byte, padBytes)...) // 填充 padding 数据
 	}
-	n, err = e.bw.Write(data)     //data 写入 buffer，后续落盘
+	n, err = e.bw.Write(data)     // data 写入 buffer，后续落盘
 	walWriteBytes.Add(float64(n)) // 更新 metric
 	return err
 }

@@ -136,10 +136,10 @@ func (f *fifo) run() {
 		f.mu.Lock()
 		if len(f.pendings) != 0 {
 			f.scheduled++
-			todo = f.pendings[0]
+			todo = f.pendings[0] // 每次拿一个 apply 任务
 		}
 		f.mu.Unlock()
-		if todo == nil {
+		if todo == nil { // 没有任务
 			select {
 			case <-f.resume:
 			case <-f.ctx.Done():

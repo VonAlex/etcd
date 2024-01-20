@@ -22,7 +22,7 @@ import (
 )
 
 // MajorityConfig is a set of IDs that uses majority quorums to make decisions.
-// MajorityConfig 是使用多数法定人数来做决策的一组 ID，其实就是 peerID 的 set
+// MajorityConfig 是使用多数法定人数来做决策的一组 ID，其实就是 peerID 的集合
 type MajorityConfig map[uint64]struct{}
 
 func (c MajorityConfig) String() string {
@@ -40,7 +40,7 @@ func (c MajorityConfig) String() string {
 		fmt.Fprint(&buf, sl[i])
 	}
 	buf.WriteByte(')')
-	return buf.String()
+	return buf.String() // (id1 id2 id3)
 }
 
 // Describe returns a (multi-line) representation of the commit indexes for the
